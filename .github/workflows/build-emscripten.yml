@@ -6,12 +6,12 @@ jobs:
   build:
     strategy:
       matrix:
-        os:         ["windows-latest", "ubuntu-24.04", "macos-14"]
+        os:         ["windows-latest", "ubuntu-24.04", "macos-15"]
         build_type: ["Debug", "Release"]
 
         exclude:
           # Exclude MacOS-Release
-          - os:         "macos-14"
+          - os:         "macos-15"
             build_type: "Release"
 
         include:
@@ -30,7 +30,7 @@ jobs:
             host_name: "Linux"
             cmake_args: "-DDILIGENT_EMSCRIPTEN_STRIP_DEBUG_INFO=ON -DDILIGENT_EMSCRIPTEN_INCLUDE_COI_SERVICE_WORKER=ON"
 
-          - os:        "macos-14"
+          - os:        "macos-15"
             host_name: "MacOS"
             cmake_args: "-DDILIGENT_EMSCRIPTEN_STRIP_DEBUG_INFO=ON"
 
@@ -45,20 +45,20 @@ jobs:
 
     - name: Set up build environment
       if:  success()
-      uses: DiligentGraphics/github-action/setup-build-env@v7
+      uses: DiligentGraphics/github-action/setup-build-env@v8
       with:
         platform: Web
 
     - name: Configure CMake
       if:   success()
-      uses: DiligentGraphics/github-action/configure-cmake@v7
+      uses: DiligentGraphics/github-action/configure-cmake@v8
       with:
         build-type: ${{ matrix.build_type }}
         cmake-args: ${{ matrix.cmake_args }}
 
     - name: Build
       if: success()
-      uses: DiligentGraphics/github-action/build@v7
+      uses: DiligentGraphics/github-action/build@v8
 
     - name: Pack Web Artifacts
       if:  ${{ success() && (matrix.host_name == 'Linux') && (matrix.build_type == 'Release') }}
