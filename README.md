@@ -745,6 +745,7 @@ Available CMake options are summarized in the table below:
 | `DILIGENT_CLANG_DEBUG_COMPILE_OPTIONS`  |              | Additional Clang compile options for debug configuration     |
 | `DILIGENT_CLANG_RELEASE_COMPILE_OPTIONS`|    -mavx2    | Additional Clang compile options for release configurations  |
 | `DILIGENT_USD_PATH`                     |              | Path to USD installation folder                              |
+| `DILIGENT_USE_OPENXR` 				  |     No       | Enable OpenXR support                                        |
 
 By default, all back-ends available on the current platform are built. To disable specific back-ends,
 use the following options: `DILIGENT_NO_DIRECT3D11`, `DILIGENT_NO_DIRECT3D12`, `DILIGENT_NO_OPENGL`,
@@ -1079,6 +1080,9 @@ We would appreciate it if you could send us a link in case your product uses Dil
 
 * [Vrmac Graphics](https://github.com/Const-me/Vrmac): A cross-platform graphics library for .NET<br />
   <img src="https://github.com/Const-me/Vrmac/blob/master/screenshots/Linux/TigerFullHD-1.png" width=600>
+
+* [Prisma Engine](https://github.com/deni2312/prisma-engine): A modern engine that shows rendering techniques like hardware raytracing and clustered shading<br />
+  <img src="https://github.com/deni2312/prisma-engine/blob/main/bin/images/prism.png" width=600>
 
 
 <a name="disclaimer"></a>
