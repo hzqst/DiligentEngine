@@ -11,6 +11,12 @@ set(CMAKE_XCODE_SCHEME_MALLOC_GUARD_EDGES YES)
 
 project(DiligentEngine)
 
+option(USE_VCLTL "USE VCLTL" OFF)
+
+if(USE_VCLTL)
+include("VC-LTL helper for cmake.cmake")
+endif()
+
 option(DILIGENT_BUILD_TOOLS "Build DiligentTools module" ON)
 option(DILIGENT_BUILD_FX "Build DiligentFX module" ON)
 option(DILIGENT_BUILD_SAMPLES "Build DiligentSamples module" ON)
