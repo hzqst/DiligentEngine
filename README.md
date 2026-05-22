@@ -23,13 +23,14 @@ under the permissive [Apache 2.0 license](License.txt).
 | <img src="https://github.com/DiligentGraphics/DiligentCore/blob/master/media/uwindows-logo.png" width=24 valign="middle"> Universal Windows  | :heavy_check_mark: | :heavy_check_mark: | -                  | -                               | -                               | -                               |  [![Build Status](https://github.com/DiligentGraphics/DiligentEngine/actions/workflows/build-windows.yml/badge.svg?branch=master)](https://github.com/DiligentGraphics/DiligentEngine/actions/workflows/build-windows.yml?query=branch%3Amaster) |
 | <img src="https://github.com/DiligentGraphics/DiligentCore/blob/master/media/linux-logo.png" width=24 valign="middle"> Linux                 | -                  | -                  | :heavy_check_mark: | :heavy_check_mark:              | -                               | :heavy_check_mark: <sup>3</sup> |  [![Build Status](https://github.com/DiligentGraphics/DiligentEngine/actions/workflows/build-linux.yml/badge.svg?branch=master)](https://github.com/DiligentGraphics/DiligentEngine/actions/workflows/build-linux.yml?query=branch%3Amaster) |
 | <img src="https://github.com/DiligentGraphics/DiligentCore/blob/master/media/android-logo.png" width=24 valign="middle"> Android             | -                  | -                  | :heavy_check_mark: | :heavy_check_mark:              | -                               | -                               |  [![Build Status](https://github.com/DiligentGraphics/DiligentEngine/actions/workflows/build-android.yml/badge.svg?branch=master)](https://github.com/DiligentGraphics/DiligentEngine/actions/workflows/build-android.yml?query=branch%3Amaster) |
-| <img src="https://github.com/DiligentGraphics/DiligentCore/blob/master/media/macos-logo.png" width=24 valign="middle"> MacOS                 | -                  | -                  | :heavy_check_mark: | :heavy_check_mark: <sup>1</sup> | :heavy_check_mark: <sup>2</sup> | :heavy_check_mark: <sup>3</sup> |  [![Build Status](https://github.com/DiligentGraphics/DiligentEngine/actions/workflows/build-apple.yml/badge.svg?branch=master)](https://github.com/DiligentGraphics/DiligentEngine/actions/workflows/build-apple.yml?query=branch%3Amaster) |
+| <img src="https://github.com/DiligentGraphics/DiligentCore/blob/master/media/macos-logo.png" width=24 valign="middle"> macOS                 | -                  | -                  | :heavy_check_mark: | :heavy_check_mark: <sup>1</sup> | :heavy_check_mark: <sup>2</sup> | :heavy_check_mark: <sup>3</sup> |  [![Build Status](https://github.com/DiligentGraphics/DiligentEngine/actions/workflows/build-apple.yml/badge.svg?branch=master)](https://github.com/DiligentGraphics/DiligentEngine/actions/workflows/build-apple.yml?query=branch%3Amaster) |
 | <img src="https://github.com/DiligentGraphics/DiligentCore/blob/master/media/apple-logo.png" width=24 valign="middle"> iOS                   | -                  | -                  | :heavy_check_mark: | :heavy_check_mark: <sup>1</sup> | :heavy_check_mark: <sup>2</sup> | -                               |  [![Build Status](https://github.com/DiligentGraphics/DiligentEngine/actions/workflows/build-apple.yml/badge.svg?branch=master)](https://github.com/DiligentGraphics/DiligentEngine/actions/workflows/build-apple.yml?query=branch%3Amaster) |
 | <img src="https://github.com/DiligentGraphics/DiligentCore/blob/master/media/tvos-logo.png" width=24 valign="middle"> tvOS                   | -                  | -                  | -                  | :heavy_check_mark: <sup>1</sup> | :heavy_check_mark: <sup>2</sup> | -                               |  [![Build Status](https://github.com/DiligentGraphics/DiligentEngine/actions/workflows/build-apple.yml/badge.svg?branch=master)](https://github.com/DiligentGraphics/DiligentEngine/actions/workflows/build-apple.yml?query=branch%3Amaster) |
+| <img src="https://github.com/DiligentGraphics/DiligentCore/blob/master/media/visionos-logo.png" width=24 valign="middle"> visionOS           | -                  | -                  | -                  | -                               | :heavy_check_mark: <sup>2</sup> | -                               |                                                                                                                                                                                                                                              |
 | <img src="https://github.com/DiligentGraphics/DiligentCore/blob/master/media/emscripten-logo.png" width=24 valign="middle"> Web              | -                  | -                  | :heavy_check_mark: | -                               | -                               | :heavy_check_mark:              |  [![Build Status](https://github.com/DiligentGraphics/DiligentEngine/actions/workflows/build-emscripten.yml/badge.svg?branch=master)](https://github.com/DiligentGraphics/DiligentEngine/actions/workflows/build-emscripten.yml?query=branch%3Amaster) |
 
 
-<sup>1</sup> Vulkan API is not natively supported on MacOS, iOS and tvOS platforms and requires a Vulkan portability implementation such as [MoltenVK](https://github.com/KhronosGroup/MoltenVK)
+<sup>1</sup> Vulkan API is not natively supported on macOS, iOS and tvOS platforms and requires a Vulkan portability implementation such as [MoltenVK](https://github.com/KhronosGroup/MoltenVK)
 or [gfx-portability](https://github.com/gfx-rs/portability).
 
 <sup>2</sup> Available under commercial license - please contact us for details.
@@ -106,7 +107,7 @@ Minimum supported low-level API versions:
   - [Universal Windows Platform](#build_and_run_uwp)
   - [Linux](#build_and_run_linux)
   - [Android](#build_and_run_android)
-  - [MacOS](#build_and_run_macos)
+  - [macOS](#build_and_run_macos)
   - [iOS](#build_and_run_ios)
   - [Web](#build_and_run_web)
   - [Integrating Diligent Engine with Existing Build System](#build_and_run_integration)
@@ -326,7 +327,7 @@ By default, applications will run in Vulkan mode. To run them in Vulkan mode, ad
 `--es mode gles` (in Android Studio, go to Run->Edit Configurations menu)
 
 <a name="build_and_run_macos"></a>
-## MacOS
+## macOS
 
 Prerequisites:
 
@@ -349,7 +350,7 @@ sudo xcode-select --reset
 
 ### Configuring Vulkan Build Environment
 
-By default there is no Vulkan implementation on MacOS. Diligent Engine loads Vulkan dynamically
+By default there is no Vulkan implementation on macOS. Diligent Engine loads Vulkan dynamically
 and can use a Vulkan Portability implementation such as [MoltenVK](https://github.com/KhronosGroup/MoltenVK)
 or [gfx-portability](https://github.com/gfx-rs/portability). Install [VulkanSDK](https://vulkan.lunarg.com/sdk/home#mac)
 and make sure that your system is properly configured as described
@@ -378,7 +379,7 @@ defaults write com.apple.dt.Xcode UseSanitizedBuildSystemEnvironment -bool NO
 
 Please refer to [this page](https://vulkan.lunarg.com/doc/sdk/latest/mac/getting_started.html) for more details.
 
-:warning: `DYLD_LIBRARY_PATH` and `LD_LIBRARY_PATH` environment variables are ignored on MacOS unless
+:warning: `DYLD_LIBRARY_PATH` and `LD_LIBRARY_PATH` environment variables are ignored on macOS unless
 System Integrity Protection is disabled (which generally is not recommended). In order for executables to find the
 Vulkan library, it must be in rpath. If `VULKAN_SDK` environment variable is set and points to correct location, Diligent
 Engine will configure the rpath for all applications automatically.
@@ -1003,6 +1004,7 @@ descriptions (compile shaders for target platforms, define internal resource lay
 | [27 - Post-Processing](https://github.com/DiligentGraphics/DiligentSamples/tree/master/Tutorials/Tutorial27_PostProcessing)       <br /><br /> [:arrow_forward: Run](https://diligentgraphics.github.io/wasm-modules/Tutorial27_PostProcessing/Tutorial27_PostProcessing.html)        | <img src="https://github.com/DiligentGraphics/DiligentSamples/blob/master/Tutorials/Tutorial27_PostProcessing/Screenshot.jpg" width=240>  | This tutorial demonstrates how to use post-processing effects from the DiligentFX module. |
 | [28 - OpenXR](https://github.com/DiligentGraphics/DiligentSamples/tree/master/Tutorials/Tutorial28_HelloOpenXR)                                                                                                                                                                       |                                                                                                                                           | This tutorial demonstrates how to use Diligent Engine with OpenXR API to render a simple scene in a VR headset. |
 | [29 - OIT](https://github.com/DiligentGraphics/DiligentSamples/tree/master/Tutorials/Tutorial29_OIT)                              <br /><br /> [:arrow_forward: Run](https://diligentgraphics.github.io/wasm-modules/Tutorial29_OIT/Tutorial29_OIT.html)                              | ![](https://github.com/DiligentGraphics/DiligentSamples/blob/master/Tutorials/Tutorial29_OIT/Animation_Small.gif)                         | This tutorial demonstrates how to implement order-independent transparency (OIT) methods to render transparent objects without sorting. |
+| [30 - visionOS](https://github.com/DiligentGraphics/DiligentSamples/tree/master/Tutorials/Tutorial30_HelloVisionOS)                                                                                                                                                                   | ![](https://github.com/DiligentGraphics/DiligentSamples/blob/master/Tutorials/Tutorial30_HelloVisionOS/Screenshot.jpg)                    | This tutorial demonstrates how to run Diligent Engine on Apple visionOS. |
 
 <a name="samples"></a>
 # [Samples](https://github.com/DiligentGraphics/DiligentSamples)
