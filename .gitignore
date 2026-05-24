@@ -1,3 +1,5 @@
 build
 out
 .vs
+x64/Debug
+x64/Release
