@@ -4,6 +4,8 @@
 
 This design defines how to port NVIDIA RTXPT's advanced real-time path tracing sample into DiligentEngine as a new sample named `RTXPT`, located at `DiligentSamples/Samples/RTXPT`.
 
+The source code of RTXPT can be found at `D:/RTXPT-fork`. prefer using serena mcp tools to access it.
+
 The long-term target is to reproduce the current RTXPT advanced sample as completely as practical. The implementation must still move in runnable increments: after every migration task, the `RTXPT` sample must start and render a valid fallback or feature-specific result that can be reviewed. Any capability that is not complete yet must be isolated behind a feature flag or fallback path and marked in code with a structured `// TODO(RTXPT-Port Phase N): ...` comment.
 
 The port must support both Diligent D3D12 and Vulkan backends from the start. D3D12-only or Vulkan-only advanced paths may exist only behind explicit capability checks.
