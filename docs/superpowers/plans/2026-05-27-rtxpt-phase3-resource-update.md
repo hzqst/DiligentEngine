@@ -1418,12 +1418,12 @@ Expected: top-level commit records the updated `DiligentSamples` submodule point
 
 ## Self-Review Checklist
 
-- [ ] The plan directly follows Phase 3 of `docs/superpowers/specs/2026-05-26-rtxpt-diligent-port-design.md`.
-- [ ] The plan preserves the current runnable clear fallback.
-- [ ] The plan makes AssetLoader-created glTF buffers valid for Diligent BLAS input with `BIND_RAY_TRACING`.
-- [ ] The plan creates frame constants, material buffers, light buffers, BLAS, and TLAS.
-- [ ] The plan explicitly handles the no-ray-tracing fallback path.
-- [ ] The plan keeps TraceRays, RT PSO/SBT, shader porting, OMM, AS compaction, and dynamic/skinned updates out of this runnable increment.
-- [ ] Every new source/header file is added to `DiligentSamples/Samples/RTXPT/CMakeLists.txt`.
-- [ ] Verification commands avoid build/runtime execution unless the user explicitly asks for it.
-- [ ] Commit commands use the required `Co-Authored-By: GPT 5.5` trailer.
+- [x] The plan directly follows Phase 3 of `docs/superpowers/specs/2026-05-26-rtxpt-diligent-port-design.md`.
+- [x] The plan preserves the current runnable clear fallback.
+- [x] The plan makes AssetLoader-created glTF buffers valid for Diligent BLAS input with `BIND_RAY_TRACING`.
+- [x] The plan creates frame constants, material buffers, light buffers, BLAS, and TLAS.
+- [x] The plan explicitly handles the no-ray-tracing fallback path.
+- [x] The plan keeps TraceRays, RT PSO/SBT, shader porting, OMM, AS compaction, and dynamic/skinned updates out of this runnable increment.
+- [x] Every new source/header file is added to `DiligentSamples/Samples/RTXPT/CMakeLists.txt`.
+- [x] Verification commands avoid build/runtime execution unless the user explicitly asks for it.
+- [x] Commit commands use the required `Co-Authored-By: GPT 5.5` trailer.
