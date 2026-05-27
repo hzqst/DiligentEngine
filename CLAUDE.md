@@ -168,4 +168,4 @@ Keep the following topics in Serena memories and load them on demand:
 
 ### Startup Rule
 
-- Always run `activate_project` when the agent starts.
+- Always run `activate_project` when the session starts.
