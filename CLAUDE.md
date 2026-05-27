@@ -150,7 +150,7 @@ Keep the following topics in Serena memories and load them on demand:
 - Common development commands: `suggested_commands`
 - Code style and conventions: `code_style_conventions`
 - Development guidelines and caveats: `development_guidelines`
-- Post-task checklist: `task_completion_checklist`
+- Post-coding-task checklist: `task_completion_checklist`
 - Module-specific topics (for example, graphics backends or platform layers) as separate memory files when needed
 
 ### Source-File Entry Points When Memories Are Insufficient (Read On Demand)
