@@ -4,9 +4,9 @@
 
 **Goal:** Land Phase 5 shader layers 2 and 3 from the RTXPT port design — shared HLSL structs/constants/binding declarations plus the scene/material bridge — so the existing minimal ray tracing pass reads per-instance/per-geometry material attributes from the C++ scene data and shows real material base color on hits.
 
-**Architecture:** Add three shared HLSL headers (`RTXPTShaderShared.hlsli`, `RTXPTSceneBridge.hlsli`, `RTXPTMaterialBridge.hlsli`) that mirror the C++ Phase 3 buffer layouts and centralize how shaders fetch sub-instance, material, and light data. Extend `RTXPTAccelerationStructures` to build a per-(instance, geometry) `SubInstanceData` buffer that maps `InstanceContributionToHitGroupIndex() + GeometryIndex()` to a material id. Extend `RTXPTRayTracingPass::Initialize` to bind the material, sub-instance, and light structured buffers as static shader resources, and replace `RTXPTMinimal.rchit` with a bridge-driven flat-shaded variant that falls back to barycentric debug coloring when bridge data is unavailable.
+**Architecture:** Add three shared HLSL headers (`RTXPTShaderShared.hlsli`, `RTXPTSceneBridge.hlsli`, `RTXPTMaterialBridge.hlsli`) that mirror the C++ Phase 3 buffer layouts and centralize how shaders fetch sub-instance, material, and light data. Extend `RTXPTAccelerationStructures` to build a per-(instance, geometry) `SubInstanceData` buffer that maps `InstanceID() + GeometryIndex()` to a material id, where `InstanceID()` is the TLAS `CustomId` sub-instance base written by C++. Extend `RTXPTRayTracingPass::Initialize` to bind the material, sub-instance, and light structured buffers as static shader resources, and replace `RTXPTMinimal.rchit` with a bridge-driven flat-shaded variant that falls back to barycentric debug coloring when shader-side bridge table checks fail.
 
-**Tech Stack:** C++17, DiligentSamples `SampleBase`, DiligentCore ray tracing PSO/SBT APIs, DiligentTools `GLTFLoader` (`GLTF::Material::ShaderAttribs`), HLSL 6.3 ray tracing shaders compiled by DXC, Diligent shader resource binding APIs, Dear ImGui.
+**Tech Stack:** C++17, DiligentSamples `SampleBase`, DiligentCore ray tracing PSO/SBT APIs, DiligentTools `GLTFLoader` (`GLTF::Material::ShaderAttribs`), HLSL 6.5 ray tracing shaders compiled by DXC, Diligent shader resource binding APIs, Dear ImGui.
 
 ---
 
@@ -43,8 +43,8 @@ This plan implements Phase 5.1 runnable milestone:
 - Add shared HLSL infrastructure: a single source of truth for frame constants, ray payload, material struct, sub-instance struct, and light struct.
 - Add `RTXPTSubInstanceData` buffer construction (per-(instance, geometry) material id) inside `RTXPTAccelerationStructures`.
 - Extend `RTXPTRayTracingPass::Initialize` to bind the material buffer, sub-instance buffer, and light buffer as static structured-buffer SRVs.
-- Replace `RTXPTMinimal.rchit` with a bridge-driven hit shader that reads `g_SubInstanceData[InstanceContributionToHitGroupIndex() + GeometryIndex()].MaterialID`, looks up `g_Materials[MaterialID].BaseColorFactor`, and writes a stable color.
-- Preserve a barycentric-fallback path inside the new `rchit` for the case where sub-instance/material bindings are unavailable.
+- Replace `RTXPTMinimal.rchit` with a bridge-driven hit shader that reads `g_SubInstanceData[InstanceID() + GeometryIndex()].MaterialID`, looks up `g_Materials[MaterialID].BaseColorFactor`, and writes a stable color.
+- Preserve a barycentric-fallback path inside the new `rchit` when shader-side bridge table checks fail; C++ treats missing required bridge SRV bindings as initialization failure instead of tracing with unbound resources.
 - Keep `RTXPTMinimal.rgen` and `RTXPTMinimal.rmiss` essentially the same; only switch their includes to use the shared bridge.
 - Add ImGui status lines for sub-instance count and bridge bindings.
 - Add structured `TODO(RTXPT-Port Phase 5)` markers for the bridge work that is intentionally deferred (textures, normals/UVs, alpha test, transmissive materials, light sampling).
@@ -186,7 +186,9 @@ struct RTXPTPrimaryPayload
 };
 
 // Mirrors RTXPTSubInstanceData in RTXPTAccelerationStructures.hpp.
-// One entry per (BLAS instance, geometry) pair; index = InstanceContributionToHitGroupIndex() + GeometryIndex().
+// One entry per (BLAS instance, geometry) pair. C++ stores the per-instance
+// sub-instance base in TLAS CustomId, exposed to closest-hit shaders as InstanceID().
+// index = InstanceID() + GeometryIndex().
 struct RTXPTSubInstanceData
 {
     uint MaterialID;
@@ -249,10 +251,13 @@ StructuredBuffer<RTXPTLightData>         g_Lights;
 
 namespace Bridge
 {
+#ifdef RTXPT_ENABLE_HIT_BRIDGE
     // Linear index for the SubInstanceData entry that describes the currently hit (instance, geometry).
+    // C++ stores the per-instance sub-instance base in InstanceID(), and GeometryIndex() is used to
+    // select the geometry within the BLAS.
     uint GetSubInstanceIndex()
     {
-        return InstanceContributionToHitGroupIndex() + GeometryIndex();
+        return InstanceID() + GeometryIndex();
     }
 
     // Returns the SubInstanceData entry for the current hit.
@@ -271,6 +276,7 @@ namespace Bridge
         g_SubInstanceData.GetDimensions(Count, Stride);
         return Count > 0;
     }
+#endif
 
     // Total active light count. May be zero on scenes without lights.
     uint GetLightCount()
@@ -509,7 +515,7 @@ Immediately after that line, append the sub-instance entry while the primitive i
             SubInstances.emplace_back(SubEntry);
 ```
 
-This guarantees `SubInstances.size()` matches the cumulative geometry count and stays consistent with `InstanceContributionToHitGroupIndex() + GeometryIndex()` for `HIT_GROUP_BINDING_MODE_PER_GEOMETRY` with `HitGroupStride = 1`.
+This guarantees `SubInstances.size()` matches the cumulative geometry count and stays consistent with `InstanceID() + GeometryIndex()`, where `InstanceID()` is the TLAS `CustomId` sub-instance base and `GeometryIndex()` selects the geometry within the BLAS.
 
 - [x] **Step 4: Create the sub-instance buffer after the TLAS build**
 
@@ -786,14 +792,14 @@ bool RTXPTRayTracingPass::Initialize(IRenderDevice*  pDevice,
     m_TLAS = pTLAS;
 
     RefCntAutoPtr<IShaderSourceInputStreamFactory> pShaderSourceFactory;
-    pEngineFactory->CreateDefaultShaderSourceStreamFactory(nullptr, &pShaderSourceFactory);
+    pEngineFactory->CreateDefaultShaderSourceStreamFactory("shaders", &pShaderSourceFactory);
 
     ShaderCreateInfo ShaderCI;
     ShaderCI.Desc.UseCombinedTextureSamplers = false;
     ShaderCI.SourceLanguage                  = SHADER_SOURCE_LANGUAGE_HLSL;
     ShaderCI.ShaderCompiler                  = SHADER_COMPILER_DXC;
     ShaderCI.CompileFlags                    = SHADER_COMPILE_FLAG_PACK_MATRIX_ROW_MAJOR;
-    ShaderCI.HLSLVersion                     = {6, 3};
+    ShaderCI.HLSLVersion                     = {6, 5};
     ShaderCI.pShaderSourceStreamFactory      = pShaderSourceFactory;
 
     RefCntAutoPtr<IShader> pRayGen;
@@ -839,19 +845,16 @@ bool RTXPTRayTracingPass::Initialize(IRenderDevice*  pDevice,
     // helpers would leave dangling layout entries that GetStaticVariableByName cannot resolve.
     //
     // Stage map for Phase 5.1:
-    //   g_FrameConstants  -> raygen + miss + closest hit (all three sample frame state)
+    //   g_FrameConstants  -> raygen    (camera state for primary rays)
     //   g_TLAS            -> raygen (the only stage that issues TraceRay)
     //   g_Materials       -> closest hit (Bridge::GetMaterial)
     //   g_SubInstanceData -> closest hit (Bridge::GetSubInstanceData)
     //   g_Lights          -> miss      (Bridge::GetLight for the sun tint helper)
     //   g_OutputColor     -> raygen    (write target)
-    constexpr SHADER_TYPE FrameStages =
-        SHADER_TYPE_RAY_GEN | SHADER_TYPE_RAY_MISS | SHADER_TYPE_RAY_CLOSEST_HIT;
-
     PipelineResourceLayoutDescX ResourceLayout;
     ResourceLayout.DefaultVariableType = SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE;
     ResourceLayout
-        .AddVariable(FrameStages, "g_FrameConstants", SHADER_RESOURCE_VARIABLE_TYPE_STATIC)
+        .AddVariable(SHADER_TYPE_RAY_GEN, "g_FrameConstants", SHADER_RESOURCE_VARIABLE_TYPE_STATIC)
         .AddVariable(SHADER_TYPE_RAY_GEN, "g_TLAS", SHADER_RESOURCE_VARIABLE_TYPE_STATIC)
         .AddVariable(SHADER_TYPE_RAY_CLOSEST_HIT, "g_Materials", SHADER_RESOURCE_VARIABLE_TYPE_STATIC)
         .AddVariable(SHADER_TYPE_RAY_CLOSEST_HIT, "g_SubInstanceData", SHADER_RESOURCE_VARIABLE_TYPE_STATIC)
@@ -879,10 +882,14 @@ bool RTXPTRayTracingPass::Initialize(IRenderDevice*  pDevice,
         return true;
     };
 
-    SetStatic(SHADER_TYPE_RAY_GEN, "g_FrameConstants", pFrameConstants);
-    SetStatic(SHADER_TYPE_RAY_MISS, "g_FrameConstants", pFrameConstants);
-    SetStatic(SHADER_TYPE_RAY_CLOSEST_HIT, "g_FrameConstants", pFrameConstants);
-    SetStatic(SHADER_TYPE_RAY_GEN, "g_TLAS", m_TLAS);
+    const bool FrameConstantsBound = SetStatic(SHADER_TYPE_RAY_GEN, "g_FrameConstants", pFrameConstants);
+    const bool TLASBound = SetStatic(SHADER_TYPE_RAY_GEN, "g_TLAS", m_TLAS);
+
+    if (!FrameConstantsBound || !TLASBound)
+    {
+        m_Stats.LastError = "Failed to bind required RTXPT frame constants or TLAS";
+        return false;
+    }
 
     IDeviceObject* pMaterialsView   = nullptr;
     IDeviceObject* pSubInstanceView = nullptr;
@@ -899,9 +906,10 @@ bool RTXPTRayTracingPass::Initialize(IRenderDevice*  pDevice,
     m_Stats.SubInstanceBound    = SetStatic(SHADER_TYPE_RAY_CLOSEST_HIT, "g_SubInstanceData", pSubInstanceView);
     m_Stats.LightBridgeBound    = SetStatic(SHADER_TYPE_RAY_MISS, "g_Lights", pLightsView);
 
-    if (!m_Stats.MaterialBridgeBound || !m_Stats.SubInstanceBound)
+    if (!m_Stats.MaterialBridgeBound || !m_Stats.SubInstanceBound || !m_Stats.LightBridgeBound)
     {
-        m_Stats.LastError = "Material or sub-instance bridge buffers were not bound; closest-hit will use barycentric fallback";
+        m_Stats.LastError = "Failed to bind required RTXPT bridge buffers";
+        return false;
     }
 
     m_PSO->CreateShaderResourceBinding(&m_SRB, true);
@@ -1317,10 +1325,10 @@ Expected: one top-level commit that records the updated `DiligentSamples` submod
 ## Self-Review Checklist
 
 - [x] The plan implements only Phase 5 layers 2 and 3 from `docs/superpowers/specs/2026-05-26-rtxpt-diligent-port-design.md`. Layers 4–9 are explicitly deferred to subsequent plans.
-- [x] Each task ends with a runnable sample: in the worst case the bridge falls back to the barycentric/depth debug coloring from Phase 4.
+- [x] Each task ends with a runnable sample: shader-side bridge table checks keep the barycentric/depth debug fallback, while missing required C++ bridge bindings disable the RT pass instead of tracing with unbound SRVs.
 - [x] Shared HLSL declarations (`RTXPTShaderShared.hlsli`) are the single source of truth for structures mirrored between C++ and HLSL (`RTXPTSubInstanceData`, `RTXPTMaterialAttribs`, `RTXPTLightData`, `RTXPTFrameConstants`, `RTXPTPrimaryPayload`).
-- [x] `RTXPTAccelerationStructures` owns the sub-instance contract (`InstanceContributionToHitGroupIndex + GeometryIndex → MaterialID`), matching the spec's stated ownership.
-- [x] `RTXPTRayTracingPass` keeps the no-ray-tracing and no-standalone-RT fallbacks intact and exposes per-bridge bound/not-bound status in stats.
+- [x] `RTXPTAccelerationStructures` owns the sub-instance contract (`InstanceID() + GeometryIndex() → MaterialID`, with `InstanceID()` sourced from TLAS `CustomId`), matching Diligent's shader-visible custom-id semantics.
+- [x] `RTXPTRayTracingPass` keeps the no-ray-tracing and no-standalone-RT fallbacks intact, validates required static bridge bindings, and exposes per-bridge bound/not-bound status in stats.
 - [x] Every new shader file is registered in `DiligentSamples/Samples/RTXPT/CMakeLists.txt`.
 - [x] No textures, vertex normals/UVs, or alpha-mask handling are introduced — they remain `TODO(RTXPT-Port Phase 5.2/5.3)`.
 - [x] Verification steps avoid build/runtime execution unless the user explicitly requests it.
