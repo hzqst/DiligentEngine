@@ -161,6 +161,10 @@ Keep the following topics in Serena memories and load them on demand:
 - CI and automation: `.github/workflows/`, `appveyor.yml`
 - Large directories (avoid full scans): `ThirdParty/`, `build/`, `media/`
 
+### RTXPT Reference Sources
+
+* The source code of RTXPT can be found at `D:/RTXPT-fork`. You can use serena mcp tools to access it by activating project `D:/RTXPT-fork`. You can also read memories from RTXPT via serena mcp to know about how the RTXPT rendering pipeline work.
+
 ### Progressive Disclosure Key Points
 
 - Start from memories, then narrow to single files/symbols; avoid scanning the whole repository at once.
