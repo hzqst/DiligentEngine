@@ -163,7 +163,7 @@ Keep the following topics in Serena memories and load them on demand:
 
 ### RTXPT Reference Sources
 
-* The source code of RTXPT can be found at `D:/RTXPT-fork`. You can use serena mcp tools to access it by activating project `D:/RTXPT-fork`. You can also read memories from RTXPT via serena mcp to know about how the RTXPT rendering pipeline work.
+- The source code of RTXPT can be found at `D:/RTXPT-fork`. You can use serena mcp tools to access it by activating project `D:/RTXPT-fork`. You can also read memories from RTXPT via serena mcp to know about how the RTXPT rendering pipeline work.
 
 ### Progressive Disclosure Key Points
 
