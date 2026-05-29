@@ -4,7 +4,7 @@
 
 This design defines the work required to bring the DiligentEngine `RTXPT` sample's **reference path tracer** to parity with the original RTXPT-fork's reference mode (`PATH_TRACER_MODE_REFERENCE`). It is a follow-on to the umbrella port design (`docs/superpowers/specs/2026-05-26-rtxpt-diligent-port-design.md`) and the completed Phase 5.1–5.4 plans.
 
-The current reference path tracer (after `docs/superpowers/plans/2026-05-29-rtxpt-phase5-4-reference-nee-mis.md`) is architecturally sound and unbiased: a raygen-driven N-bounce loop (`MaxRecursionDepth = 1`), shadow rays that reuse the radiance hit group + miss shader, NEE for analytic punctual lights, cosine-hemisphere environment NEE with power-heuristic MIS, a two-lobe (Lambert + GGX) BSDF, Russian roulette, and progressive accumulation. A full source comparison against RTXPT-fork reference mode identified a set of feature and convergence-quality gaps. This spec captures **every one of those gaps as a goal** and organizes them into ordered, runnable phases.
+The current reference path tracer (after `docs/superpowers/plans/2026-05-29-rtxpt-phase5-4-reference-nee-mis.md`) is architecturally sound and unbiased: a raygen-driven N-bounce loop (`MaxRecursionDepth = 1`), shadow rays that reuse the radiance hit group + miss shader, NEE for analytic punctual lights, cosine-hemisphere environment NEE with power-heuristic MIS, a two-lobe (Lambert + GGX) BSDF, Russian roulette, and progressive accumulation. A full source comparison against RTXPT-fork reference mode identified a set of feature and convergence-quality gaps. This spec captures **every one of those gaps as a goal** and organizes them into ordered, runnable phases. It additionally includes two foundational alignment phases up front — **ImGui panel parity** and **coding-style/naming alignment** with RTXPT-fork — so that future upstream RTXPT updates are cheaper to re-port and the UI matches the original.
 
 * The source code of RTXPT can be found at `D:/RTXPT-fork`. Reference-mode behavior referenced below is from `PATH_TRACER_MODE_REFERENCE` only (not the realtime stable-plane / RTXDI track).
 
@@ -31,10 +31,25 @@ In-code, this spec resolves the existing structured markers:
 - **Runnable increments preserved.** Every phase must keep the `RTXPT` sample launching and rendering a valid result on both D3D12 and Vulkan, with new behavior toggleable and unfinished work behind `TODO(RTXPT-Port ...)` markers. This matches the umbrella spec's incremental-delivery and open-work-registry policy.
 - **Unbiasedness is a hard invariant.** Toggling any new estimator off must converge to the same image as with it on (it only changes variance). This is the primary per-phase verification.
 - **Port the math, not the framework.** Where RTXPT relies on heavy CPU bakers (`LightsBaker`, `EnvMapBaker`) or NVRHI/Donut abstractions, the goal is to reproduce the *sampling and weighting math* with a Diligent-native, minimal data path — not to port NVIDIA's baker classes verbatim.
+- **Foundational alignment lands first.** Two alignment phases precede the feature work: **R0** brings the ImGui panel to RTXPT-fork parity (with controls for not-yet-implemented features shown but disabled), and **R0.5** aligns the ported shader code's naming/structure with RTXPT-fork so future upstream merges are near-mechanical. R0.5 is a behavior-preserving refactor; doing it before R1+ means all new feature code is written in the aligned style.
+- **Style alignment keeps Diligent's formatting and copyright.** R0.5 aligns *symbol names, namespaces, file/folder organization, and macros* with RTXPT-fork. It does **not** adopt NVIDIA copyright headers or RTXPT-fork's non-clang-format formatting: files under `DiligentSamples/` keep Diligent's Apache/Diligent header and must pass DiligentCore clang-format validation.
+- **R7 is mandatory** (not optional): the shadow-ray-origin fix and grazing-angle fadeout are correctness/quality requirements; thin-lens depth of field ships as a toggleable feature within that phase.
 
 ## Goals
 
-Each goal lists the current DiligentEngine state, the RTXPT-fork reference behavior it must match (with `file:line` anchors under `D:/RTXPT-fork/Rtxpt/Shaders/`), and a concrete success criterion. Goal IDs are stable handles for the implementation plans.
+Each goal lists the current DiligentEngine state, the RTXPT-fork reference behavior it must match (with `file:line` anchors under `D:/RTXPT-fork/Rtxpt/`), and a concrete success criterion. Goal IDs are stable handles for the implementation plans.
+
+### Foundational alignment (Phases R0, R0.5)
+
+**G0 — ImGui panel parity.**
+- Current: a single flat debug-style panel (`RTXPTSample::UpdateUI` in `DiligentSamples/Samples/RTXPT/src/RTXPTSample.cpp`) mixes status/debug readouts (bridge bound, trace counts, buffer state) with path-tracer controls (Max bounces, Min bounces, NEE bounces, NEE toggles, intensity sliders, Reset accumulation) and trailing `TODO` text lines. No section grouping; labels diverge from RTXPT-fork.
+- RTXPT: a structured panel built with `CollapsingHeader` sections (`SampleUI.cpp`): **"Path Tracer"** (default open) with a Mode combo (`Reference\0Realtime`), accumulated-samples readout, "Jitter anti-aliasing" (`AccumulationAA`), "FireflyFilter (reference *)" (`ReferenceFireflyFilterEnabled`), "Use Russian Roulette early out", bounce-count sliders, "Enable tone mapping", "Use Next Event Estimation" + NEE settings (Sampling technique `Uniform\0Power+\0NEE-AT`, candidate/full sample counts, MIS Type); **"PT: Advanced Settings"** (Nested Dielectrics `Off\0Fast\0Quality`, "Enable LD sampler for BSDF", hit-object/fp16); **"Light pre-processing and sampling"** / "Distant lighting (envmap+directional)"; **"Environment Map"** (Enabled, override source, intensity); plus "Materials", "Camera", "Scene", "Display and performance", "System". Changes that invalidate accumulation use a `RESET_ON_CHANGE` wrapper.
+- Success: the path-tracer UI mirrors RTXPT-fork's `CollapsingHeader` grouping and control labels for the reference-mode-relevant controls; status/debug readouts move to their own section so they no longer clutter the controls; a reset-on-change helper matches `RESET_ON_CHANGE`. **Controls for features not yet implemented in our port are present but disabled/greyed** (with a tooltip naming the phase that will enable them) rather than absent, so the panel layout already matches the target and surfaces the roadmap.
+
+**G0.5 — Coding style & naming alignment with RTXPT-fork.**
+- Current: the ported shaders use a flat `RTXPT`-prefixed scheme (`RTXPTSampleBSDF`, `RTXPTSurface`, `RTXPTEvalSky`, `RTXPTEvalAnalyticLight`, PascalCase locals such as `WorldPos`/`FTimesNoL`) and a flattened file layout that diverges — lexically and structurally — from RTXPT-fork's `Shaders/PathTracer/` layer (`PathTracer::HandleHit`/`HandleNEE`/`HandleMiss`, `StandardBSDF`/`FalcorBSDF`, `Bridge::`, lobe types, `float3 wi/wo`, namespaced inline helpers). Re-porting an upstream RTXPT change today requires manual translation.
+- RTXPT: see `D:/RTXPT-fork/.serena/memories/style_and_conventions.md` — PascalCase classes/functions, `m_`/`g_`/`k`/`c_` prefixes, HLSL namespaces + inline helpers + traditional include guards (DXC compatibility), NVIDIA copyright, no clang-format.
+- Success: the ported HLSL **algorithm layer** (BSDF lobes, light sampling, MIS helpers, environment, and the path-tracer hit/miss/NEE/scatter functions) adopts RTXPT-fork symbol names, namespace structure (`PathTracer::`, `Bridge::`), file/folder organization (e.g. a `PathTracer/`-style layout), and macro names, so a future upstream change is a near-mechanical diff/merge rather than a translation. A short mapping doc records the unavoidable architectural divergences (our raygen-flattened loop vs. RTXPT's `PathState`/stable-plane structure; Diligent bridge vs. Donut bridge). **Hard constraints:** files under `DiligentSamples/` keep Diligent's Apache/Diligent copyright header and pass clang-format validation (we align names/structure, not copyright or formatting); C++ sample-framework glue with no RTXPT-fork analog (sample lifecycle, pass classes, binding model) keeps Diligent conventions — only GPU-facing structs mirroring shared HLSL headers align field names where it eases the CPU/GPU contract. This phase is a **behavior-preserving refactor**: output must be byte-identical before/after.
 
 ### Quick correctness & quality wins (Phase R1)
 
@@ -98,12 +113,12 @@ Each goal lists the current DiligentEngine state, the RTXPT-fork reference behav
 - RTXPT: `FalcorBSDF` adds rough-dielectric specular reflection+transmission (`SpecularReflectionTransmissionMicrofacet`, `BxDF.hlsli:385-598`) with Fresnel-driven reflect/refract and the correct refraction Jacobian; an `InteriorList` priority stack handles nested dielectrics (`Rendering/Materials/InteriorList.hlsli`, `PathTracerNestedDielectrics.hlsli`); homogeneous volume absorption (Beer-Lambert) is applied while traversing a medium (`PathTracer/PathTracer.hlsli:535-546`, `Rendering/Volumes/HomogeneousVolumeSampler.hlsli`). glTF `KHR_materials_transmission` + per-material IoR feed the BSDF (`PathTracerBridgeDonut.hlsli:742-792`).
 - Success: glass/refractive materials transmit and refract correctly; nested dielectrics resolve via the interior-list priority stack; per-medium absorption tints transmitted paths over distance. Resolves the `Phase 5.3` markers. (`ALPHA_MODE_BLEND` stochastic transparency may be included here or kept as a sub-item.)
 
-### Polish (Phase R7, optional)
+### Polish (Phase R7)
 
 **G11 — Shadow/AA polish.**
 - Current: shadow-ray origin offset along the *shading* normal; no grazing-angle shadow fadeout; no depth of field.
 - RTXPT: shadow-ray origin via `ComputeRayOrigin` along the *face* normal (`PathTracer/PathTracerNEE.hlsli:166-182`); grazing-angle shadow fadeout (`ComputeLowGrazingAngleFalloff`, `PathTracerHelpers.hlsli`); thin-lens camera with aperture for DoF (`PathTracerBridgeDonut.hlsli` `ComputeRayThinlens`).
-- Success: reduced shadow acne/leak on normal-mapped surfaces via face-normal offset; optional shadow-terminator fadeout; optional thin-lens DoF control.
+- Success: shadow acne/leak on normal-mapped surfaces is reduced via face-normal shadow-ray origin (required); grazing-angle shadow-terminator fadeout matches RTXPT (required); thin-lens depth of field is delivered as a toggleable feature with an aperture/focal-distance control. (The phase is mandatory; DoF is off by default but present and functional.)
 
 ## Non-Goals
 
@@ -115,7 +130,17 @@ Each goal lists the current DiligentEngine state, the RTXPT-fork reference behav
 
 ## Phase Design
 
-Phases are ordered by dependency and risk: cheap, high-visibility wins first; then a light list (prerequisite for emissive MIS and RIS); then environment IBL; then BSDF/sampler fidelity; then the largest material change (transmission); then optional polish. Each phase is an independently runnable increment and gets its own implementation plan when scheduled.
+Phases are ordered by dependency and risk: two foundational alignment phases first (UI parity, then the behavior-preserving style/naming refactor) so all later code is written against the aligned baseline; then cheap, high-visibility wins; then a light list (prerequisite for emissive MIS and RIS); then environment IBL; then BSDF/sampler fidelity; then the largest material change (transmission); then mandatory polish. Each phase is an independently runnable increment and gets its own implementation plan when scheduled.
+
+### Phase R0: ImGui Panel Parity
+- Goal: G0.
+- Touches: `RTXPTSample.cpp` (`UpdateUI`), `RTXPTSample.hpp` (settings/UI-state members), optionally a small UI-state struct mirroring the reference-mode subset of RTXPT-fork's `SampleUIData`.
+- Runnable milestone: the sample presents RTXPT-fork-style `CollapsingHeader` sections; reference-mode controls match labels/grouping; controls for not-yet-implemented features are visible-but-disabled with phase tooltips; status/debug readouts relocated to their own section; a reset-on-change helper restarts accumulation.
+
+### Phase R0.5: Coding Style & Naming Alignment
+- Goal: G0.5.
+- Touches: all ported HLSL files under `assets/shaders/` (renames + reorg, likely into a `PathTracer/`-style subfolder), the shared HLSL/C++ struct headers, `CMakeLists.txt` (shader registration), and the C++ that references renamed shader entry points/structs. A new mapping doc (RTXPT-fork ↔ port symbol/file correspondence + divergences).
+- Runnable milestone: shaders renamed/reorganized to mirror RTXPT-fork; the sample builds and renders **byte-identically** on D3D12 + Vulkan; clang-format validation passes; the mapping doc exists. Lands before R1 so feature phases are written in the aligned style.
 
 ### Phase R1: Quick Correctness & Quality Wins
 - Goals: G1 (firefly filter), G2 (NEE at all bounces), G3 (decorrelated seeding).
@@ -147,7 +172,7 @@ Phases are ordered by dependency and risk: cheap, high-visibility wins first; th
 - Touches: BSDF transmission lobe, interior-list + volume headers, `RTXPTReference.rchit`/`rahit` (two-sided shading, blend mode), payload growth, material data (`RTXPTMaterials` transmission/IoR), settings/UI, RT-pass payload size.
 - Runnable milestone: glass/refractive materials render correctly; nested dielectrics and absorption work; resolves the `Phase 5.3` markers.
 
-### Phase R7: Shadow/AA Polish (optional)
+### Phase R7: Shadow/AA Polish
 - Goal: G11.
 - Touches: `RTXPTReference.rgen` (shadow-ray origin, fadeout), camera ray generation (DoF), settings/UI.
 - Runnable milestone: fewer shadow artifacts on normal-mapped surfaces; optional shadow-terminator fadeout and thin-lens DoF.
