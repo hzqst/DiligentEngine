@@ -94,7 +94,7 @@ This plan intentionally does **not**:
 - Verify: top-level repository
 - Verify: `DiligentSamples`
 
-- [ ] **Step 1: Confirm top-level state**
+- [x] **Step 1: Confirm top-level state**
 
 Run from `d:\DiligentEngine-hzqst`:
 
@@ -104,7 +104,7 @@ git status --short --branch
 
 Expected: branch line `## RTXPT...origin/RTXPT` and no staged/modified files under `DiligentSamples/Samples/RTXPT` or `docs/superpowers/plans`. Unrelated files may be left untouched.
 
-- [ ] **Step 2: Confirm DiligentSamples Phase 5.3 state**
+- [x] **Step 2: Confirm DiligentSamples Phase 5.3 state**
 
 Run:
 
@@ -115,7 +115,7 @@ git -C DiligentSamples log --oneline -n 9
 
 Expected: clean working tree; the most recent commit is `56343eca fix(rtxpt): bind material textures as array SRVs`, above the seven `feat(rtxpt): ... phase 5.3 ...` / `fix` commits.
 
-- [ ] **Step 3: Confirm the BSDF file does not yet exist**
+- [x] **Step 3: Confirm the BSDF file does not yet exist**
 
 Run:
 
@@ -125,7 +125,7 @@ Test-Path DiligentSamples/Samples/RTXPT/assets/shaders/RTXPTBSDF.hlsli
 
 Expected: `False`. If it already exists, inspect it before overwriting and preserve unrelated work.
 
-- [ ] **Step 4: Confirm the resolved-by-this-plan TODO markers are present**
+- [x] **Step 4: Confirm the resolved-by-this-plan TODO markers are present**
 
 Run:
 
@@ -145,7 +145,7 @@ Expected matches in: `RTXPTMaterialBridge.hlsli` (1, "Shade with the metallic-ro
 
 Context: the bindless texture table already holds the metallic-roughness and normal textures (they are part of `Model.GetTexture(i)`), so this task adds only the per-material **indices/slices/flags** that point into that table. `GLTF::DefaultMetallicRoughnessTextureAttribId == 1`, `GLTF::DefaultNormalTextureAttribId == 2`. The struct grows from 64 to 96 bytes (six 16-byte rows).
 
-- [ ] **Step 1: Replace the `RTXPTMaterialData` struct and flag constants in `RTXPTMaterials.hpp`**
+- [x] **Step 1: Replace the `RTXPTMaterialData` struct and flag constants in `RTXPTMaterials.hpp`**
 
 In `DiligentSamples/Samples/RTXPT/src/RTXPTMaterials.hpp`, locate this block (the struct, its `static_assert`, and the three flag constants):
 
@@ -211,6 +211,12 @@ struct RTXPTMaterialData
     float Padding3 = 0.0f;
 };
 static_assert(sizeof(RTXPTMaterialData) == 96, "RTXPTMaterialData layout must match RTXPTShaderShared.hlsli");
+static_assert(offsetof(RTXPTMaterialData, MetallicRoughnessTextureIndex) == 60,
+              "RTXPTMaterialData MetallicRoughnessTextureIndex offset must match RTXPTShaderShared.hlsli");
+static_assert(offsetof(RTXPTMaterialData, NormalTextureIndex) == 68,
+              "RTXPTMaterialData NormalTextureIndex offset must match RTXPTShaderShared.hlsli");
+static_assert(offsetof(RTXPTMaterialData, NormalScale) == 76,
+              "RTXPTMaterialData NormalScale offset must match RTXPTShaderShared.hlsli");
 
 // Flag bits for RTXPTMaterialData::Flags. Keep in sync with kRTXPTMaterialFlag* in RTXPTShaderShared.hlsli.
 constexpr Uint32 kRTXPTMaterialFlag_HasBaseColorTexture         = 0x1u;
@@ -220,7 +226,7 @@ constexpr Uint32 kRTXPTMaterialFlag_HasMetallicRoughnessTexture = 0x8u;
 constexpr Uint32 kRTXPTMaterialFlag_HasNormalTexture            = 0x10u;
 ```
 
-- [ ] **Step 2: Populate the MR + normal fields in `RTXPTMaterials.cpp`**
+- [x] **Step 2: Populate the MR + normal fields in `RTXPTMaterials.cpp`**
 
 In `DiligentSamples/Samples/RTXPT/src/RTXPTMaterials.cpp`, locate the emissive-texture block followed by the alpha-test block inside the material loop:
 
@@ -271,7 +277,7 @@ Replace it with:
             Data.Flags |= kRTXPTMaterialFlag_AlphaTested;
 ```
 
-- [ ] **Step 3: Run a non-build formatting check**
+- [x] **Step 3: Run a non-build formatting check**
 
 Run:
 
@@ -281,7 +287,7 @@ git -C DiligentSamples diff --check -- Samples/RTXPT/src/RTXPTMaterials.hpp Samp
 
 Expected: no output and exit code 0.
 
-- [ ] **Step 4: Commit the GPU material data growth**
+- [x] **Step 4: Commit the GPU material data growth**
 
 Run:
 
@@ -299,7 +305,7 @@ Expected: one `DiligentSamples` commit containing only the two material files.
 **Files:**
 - Modify: `DiligentSamples/Samples/RTXPT/assets/shaders/RTXPTShaderShared.hlsli`
 
-- [ ] **Step 1: Replace the `RTXPTMaterialData` mirror and flag constants**
+- [x] **Step 1: Replace the `RTXPTMaterialData` mirror and flag constants**
 
 In `DiligentSamples/Samples/RTXPT/assets/shaders/RTXPTShaderShared.hlsli`, locate:
 
@@ -369,7 +375,7 @@ static const uint kRTXPTMaterialFlagHasMetallicRoughnessTexture = 0x8u;
 static const uint kRTXPTMaterialFlagHasNormalTexture            = 0x10u;
 ```
 
-- [ ] **Step 2: Rename the payload padding floats to Metallic / Roughness**
+- [x] **Step 2: Rename the payload padding floats to Metallic / Roughness**
 
 In `DiligentSamples/Samples/RTXPT/assets/shaders/RTXPTShaderShared.hlsli`, locate the payload doc comment and struct:
 
@@ -426,7 +432,7 @@ struct RTXPTPathTracerPayload
 };
 ```
 
-- [ ] **Step 3: Run a non-build formatting check**
+- [x] **Step 3: Run a non-build formatting check**
 
 Run:
 
@@ -436,7 +442,7 @@ git -C DiligentSamples diff --check -- Samples/RTXPT/assets/shaders/RTXPTShaderS
 
 Expected: no output and exit code 0.
 
-- [ ] **Step 4: Commit the shared header update**
+- [x] **Step 4: Commit the shared header update**
 
 Run:
 
@@ -457,7 +463,7 @@ Expected: one `DiligentSamples` commit containing only the shared header.
 
 Context: a standard glTF metallic-roughness Cook-Torrance model — Trowbridge-Reitz (GGX) NDF, Smith height-correlated visibility, Schlick Fresnel — split into a Lambertian diffuse lobe and a GGX specular lobe. `RTXPTSampleBSDF` stochastically picks a lobe, samples a direction, and returns the throughput weight `f * NoL / pdf` using a single-sample MIS pdf. The file depends only on `RTXPTRandom.hlsli` (for `RTXPTRandom`, `NextFloat`, `NextFloat2`, `BuildOrthonormalBasis`, `SampleCosineHemisphere`); it operates on plain floats from the payload, not on `RTXPTMaterialData`.
 
-- [ ] **Step 1: Create `RTXPTBSDF.hlsli`**
+- [x] **Step 1: Create `RTXPTBSDF.hlsli`**
 
 Create `DiligentSamples/Samples/RTXPT/assets/shaders/RTXPTBSDF.hlsli`:
 
@@ -616,7 +622,7 @@ bool RTXPTSampleBSDF(RTXPTSurface S, float3 Wo, inout RTXPTRandom Rng,
 #endif // RTXPT_BSDF_HLSLI
 ```
 
-- [ ] **Step 2: Register `RTXPTBSDF.hlsli` in CMake**
+- [x] **Step 2: Register `RTXPTBSDF.hlsli` in CMake**
 
 In `DiligentSamples/Samples/RTXPT/CMakeLists.txt`, locate:
 
@@ -633,7 +639,7 @@ Replace it with:
     assets/shaders/RTXPTBSDF.hlsli
 ```
 
-- [ ] **Step 3: Run a non-build formatting check**
+- [x] **Step 3: Run a non-build formatting check**
 
 Run:
 
@@ -644,7 +650,7 @@ git -C DiligentSamples diff --check -- Samples/RTXPT/assets/shaders/RTXPTBSDF.hl
 
 Expected: no output and exit code 0 for both (the BSDF file is new/untracked — the second command produces no output regardless; it is included for symmetry).
 
-- [ ] **Step 4: Commit the BSDF helper**
+- [x] **Step 4: Commit the BSDF helper**
 
 Run:
 
@@ -665,7 +671,7 @@ Expected: one `DiligentSamples` commit containing the new BSDF file and the CMak
 
 Context: vertex buffer 0 has no tangent, so `ComputeWorldTangent` derives one from triangle edges + UV deltas (the standard `T = (E1*dU2.y - E2*dU1.y) / det` formula), transforms it to world space with the same object-to-world matrix used for positions/normals, and orthonormalizes it against the shading normal. Degenerate UVs fall back to an arbitrary perpendicular so the frame is always valid.
 
-- [ ] **Step 1: Add `Bridge::ComputeWorldTangent` to the scene bridge**
+- [x] **Step 1: Add `Bridge::ComputeWorldTangent` to the scene bridge**
 
 In `DiligentSamples/Samples/RTXPT/assets/shaders/RTXPTSceneBridge.hlsli`, locate the `InterpolateTexCoord` helper that closes the `RTXPT_ENABLE_HIT_BRIDGE` section:
 
@@ -690,7 +696,7 @@ Replace it with:
     }
 
     // World-space tangent derived from triangle edges + UV deltas (vertex buffer 0 carries no tangent attribute).
-    // Returned tangent is orthonormalized against WorldNormal; .w is the bitangent handedness (always +1 here).
+    // Returned tangent is orthonormalized against WorldNormal; .w is the bitangent handedness for cross(N,T) * w.
     // Degenerate UVs fall back to an arbitrary perpendicular so the TBN frame is always valid.
     float4 ComputeWorldTangent(RTXPTVertex V0, RTXPTVertex V1, RTXPTVertex V2, float3 WorldNormal)
     {
@@ -707,18 +713,26 @@ Replace it with:
         if (abs(Det) < 1e-12)
             return float4(Fallback, 1.0);
 
-        const float3 ObjTangent   = (E1 * dU2.y - E2 * dU1.y) * (1.0 / Det);
-        float3       WorldTangent = mul((float3x3)ObjectToWorld3x4(), ObjTangent);
+        const float  InvDet       = 1.0 / Det;
+        const float3 ObjTangent   = (E1 * dU2.y - E2 * dU1.y) * InvDet;
+        const float3 ObjBitangent = (E2 * dU1.x - E1 * dU2.x) * InvDet;
+        float3       WorldTangent   = mul((float3x3)ObjectToWorld3x4(), ObjTangent);
+        float3       WorldBitangent = mul((float3x3)ObjectToWorld3x4(), ObjBitangent);
 
         // Gram-Schmidt against the (already world-space) shading normal.
         WorldTangent = WorldTangent - WorldNormal * dot(WorldNormal, WorldTangent);
         const float Len = length(WorldTangent);
-        return Len > 1e-8 ? float4(WorldTangent / Len, 1.0) : float4(Fallback, 1.0);
+        if (Len <= 1e-8)
+            return float4(Fallback, 1.0);
+
+        WorldTangent = WorldTangent / Len;
+        const float Handedness = dot(cross(WorldNormal, WorldTangent), WorldBitangent) < 0.0 ? -1.0 : 1.0;
+        return float4(WorldTangent, Handedness);
     }
 #endif
 ```
 
-- [ ] **Step 2: Add `Bridge::GetMetallicRoughness` and `Bridge::GetTangentNormal` to the material bridge**
+- [x] **Step 2: Add `Bridge::GetMetallicRoughness` and `Bridge::GetTangentNormal` to the material bridge**
 
 In `DiligentSamples/Samples/RTXPT/assets/shaders/RTXPTMaterialBridge.hlsli`, locate the textured `AlphaTestPasses` helper that closes the `#ifdef RTXPT_ENABLE_MATERIAL_TEXTURES` block, the factor-only `#else` block, and the trailing GGX TODO:
 
@@ -791,7 +805,7 @@ Replace it with:
 // TODO(RTXPT-Port Phase 5.3): Honor TextureShaderAttribs UV selectors / wrap modes / atlas transform (currently assumes TEXCOORD_0 + wrap + slice).
 ```
 
-- [ ] **Step 3: Run a non-build formatting check**
+- [x] **Step 3: Run a non-build formatting check**
 
 Run:
 
@@ -801,7 +815,7 @@ git -C DiligentSamples diff --check -- Samples/RTXPT/assets/shaders/RTXPTSceneBr
 
 Expected: no output and exit code 0.
 
-- [ ] **Step 4: Commit the bridge helpers**
+- [x] **Step 4: Commit the bridge helpers**
 
 Run:
 
@@ -819,7 +833,7 @@ Expected: one `DiligentSamples` commit containing only the two bridge headers.
 **Files:**
 - Modify: `DiligentSamples/Samples/RTXPT/assets/shaders/RTXPTReference.rchit`
 
-- [ ] **Step 1: Rewrite the closest-hit shader**
+- [x] **Step 1: Rewrite the closest-hit shader**
 
 Replace the entire contents of `DiligentSamples/Samples/RTXPT/assets/shaders/RTXPTReference.rchit` with:
 
@@ -857,14 +871,16 @@ void main(inout RTXPTPathTracerPayload Payload,
 
         const float2 TexCoord = Bridge::InterpolateTexCoord(V0, V1, V2, Attributes.barycentrics);
 
+        const float3 RayDir = WorldRayDirection();
+        const float3 GeometricNormal = Bridge::ComputeGeometricNormal(V0, V1, V2);
         WorldPos    = Bridge::ComputeWorldHitPosition(V0, V1, V2, Attributes.barycentrics);
         WorldNormal = Bridge::InterpolateNormal(V0, V1, V2, Attributes.barycentrics);
         // Renormalize against the geometric normal if the interpolated normal is nearly zero
         // (degenerate vertex data) - keeps the shader robust on bad assets.
         if (dot(WorldNormal, WorldNormal) < 1e-6)
-            WorldNormal = Bridge::ComputeGeometricNormal(V0, V1, V2);
+            WorldNormal = GeometricNormal;
         // Flip the shading normal to face the camera (single-sided shading; transmission is deferred).
-        if (dot(WorldNormal, WorldRayDirection()) > 0.0)
+        if (dot(WorldNormal, RayDir) > 0.0)
             WorldNormal = -WorldNormal;
 
         // Perturb the shading normal with the tangent-space normal map (tangent derived from UV gradients).
@@ -874,7 +890,14 @@ void main(inout RTXPTPathTracerPayload Payload,
             const float4 WorldTangent = Bridge::ComputeWorldTangent(V0, V1, V2, WorldNormal);
             const float3 T            = WorldTangent.xyz;
             const float3 B            = cross(WorldNormal, T) * WorldTangent.w;
-            WorldNormal               = normalize(T * TangentNormal.x + B * TangentNormal.y + WorldNormal * TangentNormal.z);
+            const float3 MappedNormal = T * TangentNormal.x + B * TangentNormal.y + WorldNormal * TangentNormal.z;
+            const float  LenSq        = dot(MappedNormal, MappedNormal);
+            if (LenSq > 1e-8)
+            {
+                WorldNormal = MappedNormal * rsqrt(LenSq);
+                if (dot(WorldNormal, RayDir) > 0.0)
+                    WorldNormal = -WorldNormal;
+            }
         }
 
         const float2 MetalRough = Bridge::GetMetallicRoughness(Material, TexCoord);
@@ -895,7 +918,7 @@ void main(inout RTXPTPathTracerPayload Payload,
 // TODO(RTXPT-Port Phase 5.5): Add NEE shadow rays toward analytic and environment lights.
 ```
 
-- [ ] **Step 2: Run a non-build formatting check**
+- [x] **Step 2: Run a non-build formatting check**
 
 Run:
 
@@ -905,7 +928,7 @@ git -C DiligentSamples diff --check -- Samples/RTXPT/assets/shaders/RTXPTReferen
 
 Expected: no output and exit code 0.
 
-- [ ] **Step 3: Commit the closest-hit changes**
+- [x] **Step 3: Commit the closest-hit changes**
 
 Run:
 
@@ -923,7 +946,7 @@ Expected: one `DiligentSamples` commit containing only the closest-hit shader.
 **Files:**
 - Modify: `DiligentSamples/Samples/RTXPT/assets/shaders/RTXPTReference.rgen`
 
-- [ ] **Step 1: Include the BSDF helper**
+- [x] **Step 1: Include the BSDF helper**
 
 In `DiligentSamples/Samples/RTXPT/assets/shaders/RTXPTReference.rgen`, locate the include block at the top:
 
@@ -940,7 +963,7 @@ Replace it with:
 #include "RTXPTBSDF.hlsli"
 ```
 
-- [ ] **Step 2: Initialize the renamed payload fields**
+- [x] **Step 2: Initialize the renamed payload fields**
 
 In `DiligentSamples/Samples/RTXPT/assets/shaders/RTXPTReference.rgen`, locate the payload initialization:
 
@@ -960,7 +983,7 @@ Replace it with:
         Payload.Roughness   = 1.0;
 ```
 
-- [ ] **Step 3: Replace the Lambertian bounce with a BSDF sample + Russian roulette**
+- [x] **Step 3: Replace the Lambertian bounce with a BSDF sample + Russian roulette**
 
 In `DiligentSamples/Samples/RTXPT/assets/shaders/RTXPTReference.rgen`, locate the bounce body:
 
@@ -1013,7 +1036,7 @@ Replace it with:
         RayDir           = NextDir;
 ```
 
-- [ ] **Step 4: Re-target the resolved BSDF TODO**
+- [x] **Step 4: Re-target the resolved BSDF TODO**
 
 In `DiligentSamples/Samples/RTXPT/assets/shaders/RTXPTReference.rgen`, locate:
 
@@ -1031,7 +1054,7 @@ Replace it with:
 // TODO(RTXPT-Port Phase 6): Move tone mapping from raygen into the dedicated post-process chain.
 ```
 
-- [ ] **Step 5: Run a non-build formatting check**
+- [x] **Step 5: Run a non-build formatting check**
 
 Run:
 
@@ -1041,7 +1064,7 @@ git -C DiligentSamples diff --check -- Samples/RTXPT/assets/shaders/RTXPTReferen
 
 Expected: no output and exit code 0.
 
-- [ ] **Step 6: Commit the raygen changes**
+- [x] **Step 6: Commit the raygen changes**
 
 Run:
 
@@ -1062,7 +1085,7 @@ Expected: one `DiligentSamples` commit containing only the raygen shader.
 
 Context: `RTXPTPathTracerSettings::MinBounces` is currently forced to `0` in `UpdateFrameConstants`. This task adds an `m_MinBounces` member (default 3), feeds it into the frame constants, and exposes a "Min bounces (RR start)" slider that resets accumulation on change.
 
-- [ ] **Step 1: Add the `m_MinBounces` member**
+- [x] **Step 1: Add the `m_MinBounces` member**
 
 In `DiligentSamples/Samples/RTXPT/src/RTXPTSample.hpp`, locate:
 
@@ -1077,7 +1100,7 @@ Replace it with:
     Uint32                      m_MinBounces                = 3;
 ```
 
-- [ ] **Step 2: Feed `m_MinBounces` into the frame constants**
+- [x] **Step 2: Feed `m_MinBounces` into the frame constants**
 
 In `DiligentSamples/Samples/RTXPT/src/RTXPTSample.cpp`, locate (in `UpdateFrameConstants`):
 
@@ -1097,7 +1120,7 @@ Replace it with:
     m_LastFrameConstants.PathTracer.MinBounces        = m_MinBounces;
 ```
 
-- [ ] **Step 3: Add the "Min bounces (RR start)" UI slider**
+- [x] **Step 3: Add the "Min bounces (RR start)" UI slider**
 
 In `DiligentSamples/Samples/RTXPT/src/RTXPTSample.cpp`, locate (in `UpdateUI`):
 
@@ -1131,7 +1154,7 @@ Replace it with:
         RequestAccumulationReset("User reset");
 ```
 
-- [ ] **Step 4: Re-target the resolved Phase 5.3 sample TODO**
+- [x] **Step 4: Re-target the resolved Phase 5.3 sample TODO**
 
 In `DiligentSamples/Samples/RTXPT/src/RTXPTSample.cpp`, locate (in `UpdateUI`):
 
@@ -1147,7 +1170,7 @@ Replace it with:
     ImGui::Text("TODO(RTXPT-Port Phase 5.5): add explicit light sampling and MIS once the lighting baker is restored.");
 ```
 
-- [ ] **Step 5: Run a non-build formatting check**
+- [x] **Step 5: Run a non-build formatting check**
 
 Run:
 
@@ -1157,7 +1180,7 @@ git -C DiligentSamples diff --check -- Samples/RTXPT/src/RTXPTSample.hpp Samples
 
 Expected: no output and exit code 0.
 
-- [ ] **Step 6: Commit the sample wiring**
+- [x] **Step 6: Commit the sample wiring**
 
 Run:
 
@@ -1176,12 +1199,12 @@ Expected: one `DiligentSamples` commit containing the sample header and source.
 - Verify: `DiligentSamples/Samples/RTXPT`
 - Verify: top-level repository
 
-- [ ] **Step 1: Confirm the resolved markers are gone and the deferred markers remain**
+- [x] **Step 1: Confirm the resolved markers are gone and the deferred markers remain**
 
 Run:
 
 ```powershell
-rg -n "TODO\(RTXPT-Port Phase 5" DiligentSamples/Samples/RTXPT
+rg -uuu -n "TODO\(RTXPT-Port Phase 5" DiligentSamples/Samples/RTXPT
 ```
 
 Expected (resolved GGX/normal-map markers removed; deferred refinement markers remain — pre-existing `Phase 5` / `Phase 5.5` markers untouched by this plan also match the pattern and still appear):
@@ -1198,12 +1221,12 @@ RTXPTSample.cpp           : Phase 5 compiler flags (pre-existing, untouched); Ph
 Confirm no remaining match for `metallic-roughness GGX BSDF`, `metallic-roughness/normal-map`, or `single-lobe Lambertian`:
 
 ```powershell
-rg -n "metallic-roughness GGX BSDF|metallic-roughness/normal-map|single-lobe Lambertian" DiligentSamples/Samples/RTXPT
+rg -uuu -n "metallic-roughness GGX BSDF|metallic-roughness/normal-map|single-lobe Lambertian" DiligentSamples/Samples/RTXPT
 ```
 
 Expected: no output.
 
-- [ ] **Step 2: Confirm the BSDF file exists and is registered**
+- [x] **Step 2: Confirm the BSDF file exists and is registered**
 
 Run:
 
@@ -1214,7 +1237,7 @@ rg -n "RTXPTBSDF.hlsli" DiligentSamples/Samples/RTXPT/CMakeLists.txt
 
 Expected: `True` and one match in `CMakeLists.txt`.
 
-- [ ] **Step 3: Confirm the layout static_assert and mirror agree**
+- [x] **Step 3: Confirm the layout static_assert and mirror agree**
 
 Run:
 
@@ -1225,7 +1248,7 @@ rg -n "total size 96 bytes" DiligentSamples/Samples/RTXPT/assets/shaders/RTXPTSh
 
 Expected: one match each. (The C++ `static_assert` is the build-time guard that the 96-byte layout matches.)
 
-- [ ] **Step 4: Confirm the DiligentSamples log shows the Phase 5.3b commits**
+- [x] **Step 4: Confirm the DiligentSamples log shows the Phase 5.3b commits**
 
 Run:
 
@@ -1246,7 +1269,7 @@ feat(rtxpt): add phase 5.3 metallic-roughness and normal texture indices
 fix(rtxpt): bind material textures as array SRVs
 ```
 
-- [ ] **Step 5: Optional compile verification when the user explicitly requests it**
+- [x] **Step 5: Optional compile verification when the user explicitly requests it**
 
 The workspace rule says not to run build commands unless explicitly requested. If the user asks for build verification, run:
 
@@ -1295,7 +1318,7 @@ TraceRays disabled: Standalone ray tracing shaders are not supported by this dev
 
 and the sample clears the swapchain via `ClearFallback`.
 
-- [ ] **Step 8: Commit the top-level submodule pointer and plan**
+- [x] **Step 8: Commit the top-level submodule pointer and plan**
 
 After all `DiligentSamples` Phase 5.3b commits are complete, run from `d:\DiligentEngine-hzqst`:
 
@@ -1312,9 +1335,9 @@ Expected: one top-level commit that records the updated `DiligentSamples` submod
 
 - [x] **Spec coverage.** This plan resolves the deferred core of Phase 5 layer 5 (`docs/superpowers/specs/2026-05-26-rtxpt-diligent-port-design.md`, "Material specialization, alpha test and any-hit" → the "Advanced BSDF parameters" / "Material shader permutation" later-material list): the metallic-roughness GGX BSDF, normal mapping, and Russian roulette named as deferred in the Phase 5.3 plan's scope note. The still-deferred layer-5 refinements (transmission/nested dielectrics, `ALPHA_MODE_BLEND`, UV selectors/wrap/atlas, per-material permutations) are each preserved as `TODO(RTXPT-Port Phase 5.3)` markers and named in the Scope Note. Layers 6-9 stay in their own future plans.
 - [x] **Runnable increments.** Every task ends with a focused commit. The GGX BSDF runs in both the textured and factor-only paths, so when `BindlessResources` is unavailable the bounce still uses GGX with factor metallic/roughness (no texture sampling / no normal-map perturbation); when ray tracing / standalone RT is unavailable the existing `ClearFallback` path still runs. The accumulation/blit chain, the RT-pass binding model, the SBT, the payload size, and `MaxRecursionDepth` are all untouched.
-- [x] **Single source of truth.** `RTXPTMaterialData` is defined once in C++ (`RTXPTMaterials.hpp`, `static_assert(sizeof==96)`) and mirrored once in HLSL (`RTXPTShaderShared.hlsli`) with annotated, matching offsets (BaseColorFactor@0, EmissiveFactor@16, AlphaCutoff@28, Flags@32, BaseColorTextureIndex@36, EmissiveTextureIndex@40, MetallicFactor@44, RoughnessFactor@48, BaseColorTextureSlice@52, EmissiveTextureSlice@56, MetallicRoughnessTextureIndex@60, MetallicRoughnessTextureSlice@64, NormalTextureIndex@68, NormalTextureSlice@72, NormalScale@76, Padding0-3@80/84/88/92). Flag bits match across C++/HLSL (`HasMetallicRoughnessTexture=0x8`, `HasNormalTexture=0x10`). The payload stays 16 floats (64 bytes) by renaming `Padding0`/`Padding1` to `Metallic`/`Roughness`, so `MaxPayloadSize = sizeof(float)*16` in the RT pass remains correct without edits.
+- [x] **Single source of truth.** `RTXPTMaterialData` is defined once in C++ (`RTXPTMaterials.hpp`, `static_assert(sizeof==96)` plus key `offsetof` guards) and mirrored once in HLSL (`RTXPTShaderShared.hlsli`) with annotated, matching offsets (BaseColorFactor@0, EmissiveFactor@16, AlphaCutoff@28, Flags@32, BaseColorTextureIndex@36, EmissiveTextureIndex@40, MetallicFactor@44, RoughnessFactor@48, BaseColorTextureSlice@52, EmissiveTextureSlice@56, MetallicRoughnessTextureIndex@60, MetallicRoughnessTextureSlice@64, NormalTextureIndex@68, NormalTextureSlice@72, NormalScale@76, Padding0-3@80/84/88/92). Flag bits match across C++/HLSL (`HasMetallicRoughnessTexture=0x8`, `HasNormalTexture=0x10`). The payload stays 16 floats (64 bytes) by renaming `Padding0`/`Padding1` to `Metallic`/`Roughness`, so `MaxPayloadSize = sizeof(float)*16` in the RT pass remains correct without edits.
 - [x] **No new binding / proven pattern.** The metallic-roughness and normal textures are already members of the bindless `g_MaterialTextures[]` table (built from every `Model.GetTexture(i)` in `Upload`), so this plan adds only material **indices/slices/flags** and shader sampling — the RT-pass `Initialize`, SRB, and `SetArray` call are unchanged. Sampling uses the existing `Bridge::SampleMaterialTexture` (`NonUniformResourceIndex` + `SampleLevel(...,0)`), proven on D3D12 and Vulkan in Phase 5.3. The single linear `g_MaterialSampler` is correct because the GLTF loader marks base-color/emissive as sRGB (hardware-decoded) and metallic-roughness/normal as linear UNORM.
 - [x] **Type/name consistency.** `Bridge::ComputeWorldTangent` (Task 4 Step 1) returns `float4` and is consumed by `RTXPTReference.rchit` (Task 5). `Bridge::GetMetallicRoughness` returns `float2(metallic, roughness)` and `Bridge::GetTangentNormal` returns `float3` — both declared with textured and `#else` factor-only variants (Task 4 Step 2) and consumed unconditionally by the closest-hit (Task 5). `RTXPTMakeSurface` / `RTXPTSampleBSDF` / `RTXPTSurface` (Task 3) are consumed by `RTXPTReference.rgen` (Task 6). The HLSL flag constants `kRTXPTMaterialFlagHasMetallicRoughnessTexture` / `kRTXPTMaterialFlagHasNormalTexture` match the C++ `kRTXPTMaterialFlag_HasMetallicRoughnessTexture` / `_HasNormalTexture` semantics. `m_MinBounces` (Task 7 Step 1) feeds `PathTracer.MinBounces` (Step 2) and the slider (Step 3) and is read by raygen's Russian-roulette guard (Task 6 Step 3).
-- [x] **No tangent attribute handled.** Vertex buffer 0 is POSITION + NORMAL + TEXCOORD_0 only; `ComputeWorldTangent` derives the tangent from triangle edges + UV deltas, transforms it with `ObjectToWorld3x4()`, Gram-Schmidt-orthonormalizes against the shading normal, and falls back to an arbitrary perpendicular on degenerate UVs — so the TBN frame is always valid.
+- [x] **No tangent attribute handled.** Vertex buffer 0 is POSITION + NORMAL + TEXCOORD_0 only; `ComputeWorldTangent` derives tangent and bitangent handedness from triangle edges + UV deltas, transforms them with `ObjectToWorld3x4()`, Gram-Schmidt-orthonormalizes against the shading normal, and falls back to an arbitrary perpendicular on degenerate UVs — so the TBN frame is always valid, including mirrored UV islands.
 - [x] **No placeholders.** Every code step shows complete code; every command shows expected output. The only `TODO(...)` strings are the intentional, structured open-work markers required by the spec's TODO policy.
 - [x] **House style honored.** Verification avoids build/runtime execution unless the user explicitly asks (per `CLAUDE.md`); each task is a single-purpose commit using the established `Co-Authored-By: GPT 5.5` trailer (matching every prior RTXPT commit and the Phase 5.3 plan); copyright dates stay `2026`; the obsolete payload padding fields are renamed (not left as dead fields).
