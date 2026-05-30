@@ -165,6 +165,10 @@ Keep the following topics in Serena memories and load them on demand:
 
 - The source code of RTXPT can be found at `D:/RTXPT-fork`. You can use serena mcp tools to access it by activating project `D:/RTXPT-fork`. You can also read memories from RTXPT via serena mcp to know about how the RTXPT rendering pipeline work.
 
+### RTXPT - DiligentEngine counterpart mapping
+
+- See "DiligentSamples/Samples/RTXPT/RTXPT_FORK_MAPPING.md"
+
 ### Progressive Disclosure Key Points
 
 - Start from memories, then narrow to single files/symbols; avoid scanning the whole repository at once.
