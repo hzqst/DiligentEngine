@@ -165,13 +165,9 @@ Keep the following topics in Serena memories and load them on demand:
 
 - The source code of original RTXPT can be found at `D:/RTXPT-fork`. You can use serena mcp tools to access it by activating project `D:/RTXPT-fork`. You can also read memories from RTXPT via serena mcp to know about how the RTXPT rendering pipeline work.
 
-### RTXPT - DiligentEngine counterpart mapping
-
-- See `DiligentSamples/Samples/RTXPT/RTXPT_FORK_MAPPING.md`
-
 ### RTXPT - Port rules
 
-- Any new integrations that ported to `DiligentSamples/Samples/RTXPT` should ALWAYS align up coding style and naming convention with original `RTXPT-fork`.
+- Any new integrations that ported to `DiligentSamples/Samples/RTXPT` should ALWAYS align up coding style and naming convention with original `RTXPT-fork`. see `DiligentSamples/Samples/RTXPT/RTXPT_FORK_MAPPING.md`
 
 - See `D:/RTXPT-fork/.serena/memories/style_and_conventions.md` for coding style and naming convention — PascalCase classes/functions, `m_`/`g_`/`k`/`c_` prefixes, HLSL namespaces + inline helpers + traditional include guards (DXC compatibility)
 
