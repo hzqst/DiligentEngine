@@ -72,6 +72,16 @@ The buffer should carry the same fields RTXPT already consumes in `GeometryVerte
 
 That keeps the path tracer hit shaders unchanged in shape and makes the skinned path a format-preserving extension instead of a second geometry language.
 
+### Skinned Buffer Granularity
+
+The logical owner of skinned vertex data is the **skinned mesh instance**, which maps to a glTF node that references a mesh and a skin. It is not the mesh asset by itself: the same glTF mesh can be referenced by multiple nodes, and each node can have different skinning state, animation state, or instance transform. In RTXPT terms this is the same granularity as the TLAS instance / object when that object corresponds to a glTF node.
+
+The physical storage should be one current-frame skinned vertex arena for all skinned instances in the scene, not one GPU buffer per mesh, object, or node. Each skinned node gets a contiguous slice in that arena, and each primitive records offsets into the slice through the same metadata path used by RT hit shaders and BLAS build data.
+
+Static vertices do not need to be copied into the skinned arena. The geometry provider / bridge may keep the original static GLTF vertex buffer and the skinned vertex arena as separate physical buffers, but that choice must be hidden behind per-primitive metadata so downstream consumers fetch "current geometry" without re-deriving whether the source was static or skinned.
+
+The initial implementation may preserve the source mesh's addressing contract inside each skinned-node slice instead of building a perfectly minimal vertex remap. A later optimization can compact individual slices more aggressively if it also updates the index / offset metadata used by BLAS and shader fetches.
+
 ### Skinning Data Flow
 
 The scene already knows when a node references a skin and when the model has joint transforms for the current frame.
@@ -185,4 +195,3 @@ Until this spec is implemented, RTXPT code that depends on skinned current-frame
 Recommended marker shape:
 
 `// TODO(RTXPT-Port Phase R2): requires current-frame skinned vertex buffer + dynamic BLAS update.`
-
