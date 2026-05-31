@@ -6,6 +6,8 @@ This design defines the work required to bring the DiligentEngine `RTXPT` sample
 
 The current reference path tracer (after `docs/superpowers/plans/2026-05-29-rtxpt-phase5-4-reference-nee-mis.md`) is architecturally sound and unbiased: a raygen-driven N-bounce loop (`MaxRecursionDepth = 1`), shadow rays that reuse the radiance hit group + miss shader, NEE for analytic punctual lights, cosine-hemisphere environment NEE with power-heuristic MIS, a two-lobe (Lambert + GGX) BSDF, Russian roulette, and progressive accumulation. A full source comparison against RTXPT-fork reference mode identified a set of feature and convergence-quality gaps. This spec captures **every one of those gaps as a goal** and organizes them into ordered, runnable phases. It additionally includes two foundational alignment phases up front — **ImGui panel parity** and **coding-style/naming alignment** with RTXPT-fork — so that future upstream RTXPT updates are cheaper to re-port and the UI matches the original.
 
+Compared with the earlier draft, `LightsBaker` and `EnvMapBaker` are now first-class port targets: the spec requires their full observable behavior, update flow, resource outputs, and debug UI, not just the downstream sampling math.
+
 * The source code of RTXPT can be found at `D:/RTXPT-fork`. Reference-mode behavior referenced below is from `PATH_TRACER_MODE_REFERENCE` only (not the realtime stable-plane / RTXDI track).
 
 ## Relationship To The Umbrella Spec And Scope Boundary
@@ -15,13 +17,13 @@ The umbrella spec enumerates nine shader dependency layers under Phase 5 and res
 This spec therefore maps onto the umbrella spec's deferral lists:
 
 - **"Initial light support" → "Basic emissive mesh extraction"** (currently unimplemented as a light source) — Phase R2.
-- **"Later light support" → `LightsBaker` / Environment map baker / NEE feedback / light proxy generation** — Phase R3 / R4 port the *sampling math* (RIS/WRS, env importance sampling), not NVIDIA's full baker infrastructure.
+- **"Later light support" → `LightsBaker` / Environment map baker / NEE feedback / light proxy generation** — Phase R3 / R4 port the full baker pipelines: CPU-side orchestration, history/feedback buffers, proxy generation, env-map processing, and the sampling/weighting math.
 - **"Later material support" → Nested dielectrics / Transmission / Advanced BSDF parameters** — Phase R5 / R6.
 
 In-code, this spec resolves the existing structured markers:
 
 - `TODO(RTXPT-Port Phase 5.3)` (transmission / nested dielectrics / `ALPHA_MODE_BLEND`) → Phase R6.
-- `TODO(RTXPT-Port Phase 5.4)` (emissive area-light NEE + MIS, light RIS, HDR env-map MIS) → Phases R2 / R3 / R4.
+- `TODO(RTXPT-Port Phase 5.4)` (emissive area-light NEE + MIS, full `LightsBaker` light RIS/feedback/proxies, full `EnvMapBaker` HDR env-map MIS) → Phases R2 / R3 / R4.
 
 ## Confirmed Requirements And Decisions
 
@@ -30,7 +32,7 @@ In-code, this spec resolves the existing structured markers:
 - **Scope excludes the realtime track** (RTXDI/ReSTIR, stable planes, NRD, DLSS/Streamline, OMM, SER) and the unported advanced BSDF lobes (sheen, clearcoat, anisotropy).
 - **Runnable increments preserved.** Every phase must keep the `RTXPT` sample launching and rendering a valid result on both D3D12 and Vulkan, with new behavior toggleable and unfinished work behind `TODO(RTXPT-Port ...)` markers. This matches the umbrella spec's incremental-delivery and open-work-registry policy.
 - **Unbiasedness is a hard invariant.** Toggling any new estimator off must converge to the same image as with it on (it only changes variance). This is the primary per-phase verification.
-- **Port the math, not the framework.** Where RTXPT relies on heavy CPU bakers (`LightsBaker`, `EnvMapBaker`) or NVRHI/Donut abstractions, the goal is to reproduce the *sampling and weighting math* with a Diligent-native, minimal data path — not to port NVIDIA's baker classes verbatim.
+- **Port the baker behavior, not the donor API surface.** `LightsBaker` and `EnvMapBaker` are in scope as full port targets. Where RTXPT relies on NVRHI/Donut abstractions, reproduce the same observable update order, data products, and debug controls with Diligent-native plumbing rather than a verbatim API copy.
 - **Foundational alignment lands first.** Two alignment phases precede the feature work: **R0** brings the ImGui panel to RTXPT-fork parity (with controls for not-yet-implemented features shown but disabled), and **R0.5** aligns the ported shader code's naming/structure with RTXPT-fork so future upstream merges are near-mechanical. R0.5 is a behavior-preserving refactor; doing it before R1+ means all new feature code is written in the aligned style.
 - **Style alignment keeps Diligent's formatting and copyright.** R0.5 aligns *symbol names, namespaces, file/folder organization, and macros* with RTXPT-fork. It does **not** adopt NVIDIA copyright headers or RTXPT-fork's non-clang-format formatting: files under `DiligentSamples/` keep Diligent's Apache/Diligent header and must pass DiligentCore clang-format validation.
 - **R7 is mandatory** (not optional): the shadow-ray-origin fix and grazing-angle fadeout are correctness/quality requirements; thin-lens depth of field ships as a toggleable feature within that phase.
@@ -75,24 +77,24 @@ Each goal lists the current DiligentEngine state, the RTXPT-fork reference behav
 - RTXPT: emissive geometry becomes `TriangleLight` entries; NEE uniformly samples the triangle by area and converts area→solid-angle pdf (`PolymorphicLight.hlsli:399-521`, `pdfAtoW`); a BSDF ray that hits an emissive triangle is MIS-weighted against the area-light NEE estimator via the triangle's `neeTriangleLightIndex` (`PathTracer/PathTracer.hlsli:592-634`, `ComputeBSDFMISForEmissiveTriangle`). The two estimators combine with the balance heuristic.
 - Success: an emissive triangle light list is extracted (CPU side, in `RTXPTLights`/`RTXPTScene`) and bound to the shader; NEE samples emissive triangles with a shadow ray and area→solid-angle pdf; emissive BSDF hits are MIS-weighted against it; a scene lit primarily by emissive meshes converges dramatically faster and matches the BSDF-only converged result.
 
-### Light importance sampling & units (Phase R3)
+### Light importance sampling, feedback & `LightsBaker` (Phase R3)
 
-**G5 — Light importance sampling (RIS / weighted reservoir).**
+**G5 — Full `LightsBaker` parity (RIS / weighted reservoir / feedback / proxies).**
 - Current: uniform single-light selection, `index = min(uint(rand·count), count-1)`, contribution scaled by `×LightCount` (`RTXPTReference.rgen`).
-- RTXPT: RIS over `NEECandidateSamples` candidates (default 5) producing `NEEFullSamples` visibility-tested samples (default 1) via a weighted reservoir sampler; global selection is power/importance-proportional from a proxy table (`PathTracer/PathTracerNEE.hlsli:88-161`, `GenerateLightSample`/`NEEWeightedReservoirSampler`; defaults `PathTracerShared.h:84-85`). RIS target ≈ unshadowed contribution × BSDF pdf.
-- Success: an N-candidate RIS/WRS light selector with configurable candidate/full-sample counts; for many-light scenes, NEE noise drops substantially versus uniform selection; converged output matches uniform selection (unbiased).
+- RTXPT: `LightsBaker` owns the light-building lifecycle (`Rtxpt/Lighting/LightsBaker.h:49-111`, `LightsBaker.cpp:964-1454`), producing `LightingControlData`, light buffers, extended light data, proxy counters, sampling proxies, env-map lookup data, and NEE-AT feedback buffers. The shader side then consumes those outputs for RIS/WRS sampling, temporal/local feedback, and debug visualization (`Rtxpt/Shaders/PathTracer/Lighting/LightingTypes.hlsli:23-125`, `Lighting/LightSampler.hlsli:26-409`).
+- Success: the Diligent port exposes the same `LightsBaker` lifecycle and outputs, including `UpdateBegin`/`UpdateEnd`, `InfoGUI`/`DebugGUI`, proxy generation, local/global feedback, and the control/light buffers consumed by NEE. For many-light scenes, NEE noise drops substantially versus uniform selection; converged output matches the reference when the baker is disabled or bypassed.
 
 **G6 — Photometric / shaped punctual-light units.**
 - Current: raw `color · intensity` with inverse-square + squared-cone falloff and a user intensity slider (`DiligentSamples/Samples/RTXPT/assets/shaders/RTXPTLightSampling.hlsli`); directional uses a large distance sentinel.
 - RTXPT: punctual lights are sampled through `PolymorphicLight` with proper units and light shaping (`PolymorphicLight.hlsli` point/spot/directional; `evaluateLightShaping`). Point lights are modeled as small spheres with solid-angle sampling rather than pure deltas.
 - Success: punctual-light radiance uses RTXPT-consistent units and cone/shaping falloff so intensities no longer require a manual scale slider to look correct; spot cones and ranges match RTXPT behavior.
 
-### Environment-map IBL (Phase R4)
+### Environment-map IBL & `EnvMapBaker` (Phase R4)
 
-**G7 — HDR environment map with importance sampling + MIS.**
+**G7 — Full `EnvMapBaker` parity (HDR env map, cubemap processing, importance sampling).**
 - Current: a hard-coded procedural sky gradient (`DiligentSamples/Samples/RTXPT/assets/shaders/RTXPTEnvironment.hlsli`), sampled for NEE with a cosine hemisphere and power-heuristic MIS against the BSDF (`RTXPTReference.rgen`); the miss shader evaluates the same gradient (`RTXPTReference.rmiss`).
-- RTXPT: an HDR environment map is loaded and importance-sampled. Reference-mode NEE samples it via an equal-area octahedral quadtree (`EnvironmentQuadLight`, `PolymorphicLight.hlsli:562-640`, solid-angle pdf `NodeDim²/4π`); the BSDF-side miss evaluates `EnvMap::EvalLocal` (`Lighting/EnvMap.hlsli:84-87`) with a diffuse-bounce MIP offset, and the two are combined with balance-heuristic MIS (`PathTracer/PathTracer.hlsli:454-472`, env-light lookup by direction). A direct MIP-descent importance sampler also exists (`EnvMap.hlsli:172-253`).
-- Success: the sample can load an HDR environment map (procedural sky remains a fallback); env NEE importance-samples the map (equal-area or MIP-descent) instead of cosine-hemisphere; env↔BSDF MIS uses the importance-sampling pdf; a sky-lit scene converges faster and matches the BSDF-only converged result.
+- RTXPT: `EnvMapBaker` owns env-map ingestion, procedural-sky fallback, cubemap generation/mip chains, GGX prefiltering, diffuse irradiance projection, BRDF LUT generation, BC6H compression, and importance-sampling updates (`Rtxpt/Lighting/Distant/EnvMapBaker.h:49-127`, `EnvMapBaker.cpp:55-916`). The runtime path uses the baked cubemap and importance map for env sampling (`Rtxpt/Shaders/PathTracer/Lighting/EnvMap.hlsli:95-261`, `Lighting/PolymorphicLight.hlsli:562-665`).
+- Success: the sample can load an HDR environment map or procedural sky through an `EnvMapBaker` equivalent, produces the processed cubemap and BRDF LUT, exposes the importance-sampling baker/output textures, and the path tracer samples the baked env map with MIS. A sky-lit scene converges faster and matches the BSDF-only converged result.
 
 ### BSDF fidelity & sampler (Phase R5)
 
@@ -123,14 +125,14 @@ Each goal lists the current DiligentEngine state, the RTXPT-fork reference behav
 ## Non-Goals
 
 - The realtime / advanced track: stable planes, RTXDI/ReSTIR DI+GI, ReGIR, NRD denoising, DLSS/DLSS-RR/Streamline, TAA. (Umbrella spec Phase 5.5–5.8.)
-- A verbatim port of NVIDIA's CPU bakers (`LightsBaker`, `EnvMapBaker`, OMM baker) or the NVRHI/Donut bridge layers. Only the GPU-side sampling/weighting math is reproduced, on a Diligent-native data path.
+- A verbatim port of NVIDIA's NVRHI/Donut bridge layers or OMM baker. `LightsBaker` and `EnvMapBaker` are now in scope as full port targets, but their engine-local plumbing may be re-expressed through Diligent-native resource and scheduling APIs.
 - Advanced BSDF lobes not used by reference shading: sheen, clearcoat, anisotropy, Oren-Nayar.
 - SER (Shader Execution Reordering), OMM (Opacity Micro-Maps), and NVAPI shader extensions.
 - Moving tone mapping out of raygen into a dedicated post-process chain (tracked separately as `Phase 6`).
 
 ## Phase Design
 
-Phases are ordered by dependency and risk: two foundational alignment phases first (UI parity, then the behavior-preserving style/naming refactor) so all later code is written against the aligned baseline; then cheap, high-visibility wins; then a light list (prerequisite for emissive MIS and RIS); then environment IBL; then BSDF/sampler fidelity; then the largest material change (transmission); then mandatory polish. Each phase is an independently runnable increment and gets its own implementation plan when scheduled.
+Phases are ordered by dependency and risk: two foundational alignment phases first (UI parity, then the behavior-preserving style/naming refactor) so all later code is written against the aligned baseline; then cheap, high-visibility wins; then full `LightsBaker` parity (the light list, feedback, and proxy system); then full `EnvMapBaker` parity (environment IBL and baked map outputs); then BSDF/sampler fidelity; then the largest material change (transmission); then mandatory polish. Each phase is an independently runnable increment and gets its own implementation plan when scheduled.
 
 ### Phase R0: ImGui Panel Parity
 - Goal: G0.
@@ -152,15 +154,15 @@ Phases are ordered by dependency and risk: two foundational alignment phases fir
 - Touches: `RTXPTLights` / `RTXPTScene` (emissive triangle extraction + buffer), `RTXPTSceneBridge.hlsli` (light-list access), `RTXPTReference.rgen` (area-light NEE), `RTXPTReference.rchit` (per-hit triangle-light identity for MIS), settings/UI, RT-pass bindings.
 - Runnable milestone: emissive-mesh-lit scenes converge fast with correct shadows; emissive BSDF hits MIS-weighted; converged image matches BSDF-only.
 
-### Phase R3: Light Importance Sampling & Units
-- Goals: G5 (RIS/WRS), G6 (photometric/shaped units).
-- Touches: a new light-sampling/RIS header, `RTXPTLightSampling.hlsli`, `RTXPTReference.rgen`, light buffer/proxy data in `RTXPTLights`, settings/UI.
-- Runnable milestone: many-light scenes converge faster; intensities correct without a manual scale; unbiased versus uniform selection.
+### Phase R3: Light Importance Sampling, Feedback & `LightsBaker`
+- Goals: G5 (full `LightsBaker` parity), G6 (photometric/shaped units).
+- Touches: `Lighting/LightsBaker.*`, `Lighting/LightingTypes.hlsli`, `RTXPTLights`, `RTXPTScene`, `RTXPTReference.rgen`, `RTXPTReference.rchit`, settings/UI, and the light-sampling/RIS helpers.
+- Runnable milestone: the Diligent sample has a working `LightsBaker`-equivalent update flow with light/proxy/feedback outputs, and the path tracer consumes those outputs for NEE. Many-light scenes converge faster; intensities are correct without a manual scale; unbiased versus uniform selection.
 
-### Phase R4: HDR Environment-Map IBL
-- Goal: G7.
-- Touches: env-map loading (`RTXPTScene`/assets), an env importance-sampling header, `RTXPTEnvironment.hlsli`, `RTXPTReference.rmiss`, `RTXPTReference.rgen`, settings/UI, RT-pass bindings.
-- Runnable milestone: loads an HDR env map (procedural sky fallback retained); importance-sampled env NEE + MIS; sky-lit scenes converge faster and match BSDF-only.
+### Phase R4: HDR Environment-Map IBL & `EnvMapBaker`
+- Goal: G7 (full `EnvMapBaker` parity).
+- Touches: `Lighting/Distant/EnvMapBaker.*`, env-map loading (`RTXPTScene`/assets), `SampleProceduralSky`, BRDF LUT generation, env importance-sampling helpers, `RTXPTEnvironment.hlsli`, `RTXPTReference.rmiss`, `RTXPTReference.rgen`, settings/UI, RT-pass bindings.
+- Runnable milestone: an `EnvMapBaker`-equivalent pipeline loads an HDR env map or procedural sky, produces the processed cubemap, importance map, and BRDF LUT, and the path tracer samples the baked env map with MIS. Sky-lit scenes converge faster and match BSDF-only.
 
 ### Phase R5: BSDF Fidelity & Low-Discrepancy Sampler
 - Goals: G8 (VNDF/Frostbite/multi-scatter), G9 (Sobol/Owen).
@@ -184,6 +186,7 @@ These shared contracts span multiple phases and must be kept explicit (each phas
 - **Settings & frame-constants layout.** `RTXPTPathTracerSettings` (currently 48 bytes) is mirrored in C++ (`RTXPTSample.hpp`, `static_assert(sizeof == 48)`) and HLSL (`RTXPTShaderShared.hlsli`); `RTXPTFrameConstants` carries it. New per-phase toggles/parameters grow this struct in lockstep with both `static_assert`s.
 - **Payload size.** The reference payload `RTXPTPathTracerPayload` is 64 bytes; `MaxPayloadSize` is set in `RTXPTRayTracingPass`. Per-path state that lives entirely in the raygen loop (throughput, MIS bookkeeping, the firefly K-factor of G1, the nested-dielectric interior list of G10) stays raygen-local and does **not** grow the payload. Transmission (G10) adds per-hit surface fields the closest-hit must return (IoR, transmission color, specular-transmission), which likely requires payload growth — adjust `MaxPayloadSize` and the `static_assert`/comment together when it does.
 - **Light-buffer contract.** `RTXPTLights` uploads `StructuredBuffer<RTXPTLightData>` and a CPU `AnalyticLightCount`; `Bridge::GetLightCount()` returns `AnalyticLightCount` so the binding-safety dummy light is excluded from sampling. Emissive (G4) and proxy/RIS (G5) data extend this contract; the dummy-light invariant and per-stage STATIC binding rules (a STATIC variable is bound per stage and only for stages whose compiled shader references it) must be preserved.
+- **Baker lifecycle and resource contracts.** `LightsBaker` consumes scene, motion-vector, and env-map inputs, then publishes the light/proxy/feedback outputs that NEE reads; `EnvMapBaker` owns the processed cubemap, importance map, BRDF LUT, and procedural-sky state. Their update order is part of the contract: the path tracer must only sample the frame's baked lighting after the relevant baker updates complete.
 - **Hit group / SBT reuse.** Shadow/visibility rays continue to reuse hit group 0 + miss 0 with `RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_SKIP_CLOSEST_HIT_SHADER`; no new ray type unless a phase explicitly justifies it. `MaxRecursionDepth` stays 1 (all rays issued from raygen).
 - **Backends.** Every phase keeps D3D12 and Vulkan first-class; backend-specific paths require explicit capability checks (umbrella spec's capability model).
 
@@ -195,8 +198,9 @@ Per phase:
 2. **Convergence/visual delta.** Record the expected qualitative change (e.g. "emissive-lit scene converges in N× fewer samples", "less specular sparkle", "glass refracts").
 3. **Layout guards.** C++ `static_assert`s for any grown settings/payload structs compile.
 4. **Runnable on both backends.** Sample launches and renders on D3D12 and Vulkan; unsupported sub-features compile out / disable with a visible reason.
-5. **Build/runtime steps are listed for explicit user request only** (per the workspace rule: do not auto-run build/test/runtime commands).
+5. **Baker parity checks.** When a phase touches `LightsBaker` or `EnvMapBaker`, verify the expected buffers/textures exist, the debug GUI sections render, and scene/light/envmap changes trigger the same rebake/rebind order as the RTXPT-fork reference.
+6. **Build/runtime steps are listed for explicit user request only** (per the workspace rule: do not auto-run build/test/runtime commands).
 
 ## Open-Work / TODO Marker Policy
 
-Unfinished or deferred work stays behind structured `// TODO(RTXPT-Port Phase R<n>): ...` markers, consistent with the umbrella spec's open-work registry. When a phase lands, it re-targets or removes the markers it resolves (e.g. R6 resolves the `Phase 5.3` transmission markers; R2/R3/R4 resolve the `Phase 5.4` markers) and leaves new markers for any sub-item it intentionally defers.
+Unfinished or deferred work stays behind structured `// TODO(RTXPT-Port Phase R<n>): ...` markers, consistent with the umbrella spec's open-work registry. When a phase lands, it re-targets or removes the markers it resolves (e.g. R3 resolves the `LightsBaker` markers, R4 resolves the `EnvMapBaker` markers, and R6 resolves the `Phase 5.3` transmission markers) and leaves new markers for any sub-item it intentionally defers.
