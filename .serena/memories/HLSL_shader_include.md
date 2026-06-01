@@ -45,6 +45,8 @@ Existing sample pattern: `PathTracer/EmissiveTriangleBuild.hlsl` can include `Pa
 
 Prefer fixing the include path over broadening the source factory search roots when only one shader include is wrong; this keeps the runtime search behavior predictable.
 
+Nested include caveat from RTXPT R5: when `PathTracerSample.rgen` includes `"Utils/StatelessSampleGenerators.hlsli"`, a sibling include inside that file must be written as `#include "SampleGenerators.hlsli"`, not `#include "Utils/SampleGenerators.hlsli"`. The latter can be normalized by DXC/Diligent as `Utils/Utils/SampleGenerators.hlsli` and fail at runtime.
+
 ## Validation
 
 Before claiming the fix, verify both path resolution and shader compilation:
