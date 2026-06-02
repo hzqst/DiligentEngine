@@ -47,6 +47,38 @@ Prefer fixing the include path over broadening the source factory search roots w
 
 Nested include caveat from RTXPT R5: when `PathTracerSample.rgen` includes `"Utils/StatelessSampleGenerators.hlsli"`, a sibling include inside that file must be written as `#include "SampleGenerators.hlsli"`, not `#include "Utils/SampleGenerators.hlsli"`. The latter can be normalized by DXC/Diligent as `Utils/Utils/SampleGenerators.hlsli` and fail at runtime.
 
+RTXPT ToneMapper caveat from P3: when a shader is compiled with `ShaderCI.FilePath = "PostProcessing/ToneMapper/ToneMapping.hlsl"` and source roots such as `"shaders"`, sibling includes inside `PostProcessing/ToneMapper/` must not repeat the current directory prefix. This broken pattern:
+
+```hlsl
+#include "PostProcessing/ToneMapper/ToneMappingShared.h"
+#include "PostProcessing/ToneMapper/ToneMapping.ps.hlsli"
+```
+
+can fail at runtime as a doubled path:
+
+```text
+PostProcessing\ToneMapper\PostProcessing\ToneMapper\ToneMappingShared.h
+```
+
+Use sibling includes instead:
+
+```hlsl
+#include "ToneMappingShared.h"
+#include "ToneMapping.ps.hlsli"
+```
+
+Validation used for the RTXPT ToneMapper fix:
+
+```powershell
+rg -n "PostProcessing/ToneMapper/ToneMappingShared|PostProcessing/ToneMapper/ToneMapping\\.ps\\.hlsli" DiligentSamples/Samples/RTXPT/assets/shaders/PostProcessing/ToneMapper
+& 'C:\\Program Files (x86)\\Windows Kits\\10\\bin\\10.0.26100.0\\x86\\dxc.exe' -T ps_6_0 -E main_ps -I DiligentSamples\\Samples\\RTXPT\\assets\\shaders DiligentSamples\\Samples\\RTXPT\\assets\\shaders\\PostProcessing\\ToneMapper\\ToneMapping.hlsl
+& 'C:\\Program Files (x86)\\Windows Kits\\10\\bin\\10.0.26100.0\\x86\\dxc.exe' -T cs_6_0 -E capture_cs -I DiligentSamples\\Samples\\RTXPT\\assets\\shaders DiligentSamples\\Samples\\RTXPT\\assets\\shaders\\PostProcessing\\ToneMapper\\ToneMapping.hlsl
+& 'C:\\Program Files (x86)\\Windows Kits\\10\\bin\\10.0.26100.0\\x86\\dxc.exe' -T ps_6_0 -E main -I DiligentSamples\\Samples\\RTXPT\\assets\\shaders DiligentSamples\\Samples\\RTXPT\\assets\\shaders\\PostProcessing\\ToneMapper\\Luminance.psh
+cmake --build build\\x64\\Debug --config Debug --target RTXPT
+```
+
+Expected: the `rg` command has no matches; all three `dxc` commands and the RTXPT target build exit 0.
+
 ## Validation
 
 Before claiming the fix, verify both path resolution and shader compilation:
