@@ -172,12 +172,14 @@ PathTrace / stable-plane final shading writes OutputColor or stable-plane radian
 - Touches: `PathTracerSample.rgen`, `RTXPTRayTracingPass.*`, accumulation shader/pass, frame constants.
 - Milestone: raygen no longer writes `u_AccumulationBuffer` or calls `ToneMapACES`; accumulation is a separate
   pass and converges to the same image as the current path when ACES is applied afterward.
+- Follow-up plan: `docs/superpowers/plans/2026-06-02-rtxpt-post-processing-phase-p2-p3-reference-accumulation-and-tonemapping.md`.
 
 ### Phase P3: ToneMappingPass
 - Goal: G3.
 - Touches: `ToneMapper/` shaders and C++ pass equivalents, `RTXPTSample` UI/state, scene camera exposure import.
 - Milestone: `ProcessedOutputColor -> LdrColor` matches RTXPT-fork controls; disabling tone mapping is a
   pass-through, not a raygen change.
+- Follow-up plan: `docs/superpowers/plans/2026-06-02-rtxpt-post-processing-phase-p2-p3-reference-accumulation-and-tonemapping.md`.
 
 ### Phase P4: Bloom and LDR Post-Process
 - Goal: G4.
