@@ -47,7 +47,9 @@ Prefer fixing the include path over broadening the source factory search roots w
 
 Nested include caveat from RTXPT R5: when `PathTracerSample.rgen` includes `"Utils/StatelessSampleGenerators.hlsli"`, a sibling include inside that file must be written as `#include "SampleGenerators.hlsli"`, not `#include "Utils/SampleGenerators.hlsli"`. The latter can be normalized by DXC/Diligent as `Utils/Utils/SampleGenerators.hlsli` and fail at runtime.
 
-RTXPT ToneMapper caveat from P3: when a shader is compiled with `ShaderCI.FilePath = "PostProcessing/ToneMapper/ToneMapping.hlsl"` and source roots such as `"shaders"`, sibling includes inside `PostProcessing/ToneMapper/` must not repeat the current directory prefix. This broken pattern:
+RTXPT ToneMapper caveat from P3: when a shader is compiled with `ShaderCI.FilePath = "PostProcessing/ToneMapper/ToneMapping.hlsl"`, includes inside `PostProcessing/ToneMapper/` need both a compatible include spelling and matching source factory roots. Two failure modes were observed:
+
+1. Repeating the current directory prefix in the shader:
 
 ```hlsl
 #include "PostProcessing/ToneMapper/ToneMappingShared.h"
@@ -60,7 +62,26 @@ can fail at runtime as a doubled path:
 PostProcessing\ToneMapper\PostProcessing\ToneMapper\ToneMappingShared.h
 ```
 
-Use sibling includes instead:
+2. Changing only to sibling includes:
+
+```hlsl
+#include "ToneMappingShared.h"
+#include "ToneMapping.ps.hlsli"
+```
+
+can still fail if the source factory roots are only `"shaders"`:
+
+```text
+Failed to open shader include file ToneMappingShared.h
+fatal error: 'ToneMappingShared.h' file not found
+```
+
+The working pattern is sibling includes plus a source factory root for the including directory:
+
+```cpp
+pEngineFactory->CreateDefaultShaderSourceStreamFactory(
+    "shaders;shaders\\PostProcessing\\ToneMapper", &pShaderSourceFactory);
+```
 
 ```hlsl
 #include "ToneMappingShared.h"
@@ -70,14 +91,16 @@ Use sibling includes instead:
 Validation used for the RTXPT ToneMapper fix:
 
 ```powershell
+$roots = @('DiligentSamples\\Samples\\RTXPT\\assets\\shaders', 'DiligentSamples\\Samples\\RTXPT\\assets\\shaders\\PostProcessing\\ToneMapper')
+foreach ($name in @('ToneMappingShared.h','ToneMapping.ps.hlsli')) {
+  $matches = @($roots | ForEach-Object { Join-Path $_ $name } | Where-Object { Test-Path $_ })
+  '{0}: {1}' -f $name, ($(if ($matches.Count -gt 0) { 'found -> ' + ($matches -join '; ') } else { 'not found' }))
+}
 rg -n "PostProcessing/ToneMapper/ToneMappingShared|PostProcessing/ToneMapper/ToneMapping\\.ps\\.hlsli" DiligentSamples/Samples/RTXPT/assets/shaders/PostProcessing/ToneMapper
-& 'C:\\Program Files (x86)\\Windows Kits\\10\\bin\\10.0.26100.0\\x86\\dxc.exe' -T ps_6_0 -E main_ps -I DiligentSamples\\Samples\\RTXPT\\assets\\shaders DiligentSamples\\Samples\\RTXPT\\assets\\shaders\\PostProcessing\\ToneMapper\\ToneMapping.hlsl
-& 'C:\\Program Files (x86)\\Windows Kits\\10\\bin\\10.0.26100.0\\x86\\dxc.exe' -T cs_6_0 -E capture_cs -I DiligentSamples\\Samples\\RTXPT\\assets\\shaders DiligentSamples\\Samples\\RTXPT\\assets\\shaders\\PostProcessing\\ToneMapper\\ToneMapping.hlsl
-& 'C:\\Program Files (x86)\\Windows Kits\\10\\bin\\10.0.26100.0\\x86\\dxc.exe' -T ps_6_0 -E main -I DiligentSamples\\Samples\\RTXPT\\assets\\shaders DiligentSamples\\Samples\\RTXPT\\assets\\shaders\\PostProcessing\\ToneMapper\\Luminance.psh
 cmake --build build\\x64\\Debug --config Debug --target RTXPT
 ```
 
-Expected: the `rg` command has no matches; all three `dxc` commands and the RTXPT target build exit 0.
+Expected: sibling include names are found through the ToneMapper source root; the `rg` command has no matches for the broken root-prefixed includes; RTXPT target build exits 0. CLI `dxc` alone is not sufficient for this specific bug because it may resolve sibling includes differently from Diligent's runtime `DefaultShaderSourceStreamFactory`.
 
 ## Validation
 
