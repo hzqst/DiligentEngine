@@ -26,3 +26,21 @@ const float2 ndc = p * 2.0 - 1.0;
 - A regression symptom is: final RTXPT render is vertically mirrored and mouse pitch feels inverted after camera-ray changes.
 - The targeted static check is to confirm `ComputeNonNormalizedRayDirPinhole` uses `p * 2.0 - 1.0` rather than the Donut-style Y-flipped NDC expression.
 - Build verification should include `cmake --build build\x64\Debug --config Debug --target RTXPT` from the superproject root.
+
+## RTXPT Post-Process Fullscreen Y Convention
+
+- Final presentation blit and intermediate offscreen post-process passes must use different fullscreen VS conventions.
+- `assets/shaders/RTXPTBlit.vsh` is presentation-only. Its `UV`/`SV_POSITION` pairing intentionally performs the final vertical orientation conversion when copying to the swapchain.
+- Offscreen-to-offscreen passes, including tone mapping and luminance prepass, must not use `RTXPTBlit.vsh`; doing so flips the image before the final blit and changes the total flip count.
+- Use `assets/shaders/PostProcessing/RTXPTFullscreen.vsh` for offscreen fullscreen graphics passes. It keeps render-target top mapped to `UV.y == 0`:
+
+```hlsl
+Output.UV  = float2(VertexId >> 1, VertexId & 1) * 2.0;
+Output.Pos = float4(Output.UV.x * 2.0 - 1.0, 1.0 - Output.UV.y * 2.0, 0.0, 1.0);
+```
+
+- Regression symptom: after inserting tone mapping or another graphics post-process pass, final RTXPT image appears vertically mirrored and camera pitch feels inverted even though `FirstPersonCamera` and raygen NDC mapping are unchanged.
+- Targeted static checks:
+  - `RTXPTToneMappingPass.cpp` must reference `PostProcessing/RTXPTFullscreen.vsh`, not `RTXPTBlit.vsh`.
+  - `RTXPTBlitPass.cpp` should still reference `RTXPTBlit.vsh` for final swapchain presentation.
+  - Build verification: `cmake --build build\x64\Debug --config Debug --target RTXPT`.
