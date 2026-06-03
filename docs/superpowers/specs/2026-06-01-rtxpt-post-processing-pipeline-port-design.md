@@ -185,6 +185,7 @@ PathTrace / stable-plane final shading writes OutputColor or stable-plane radian
 - Goal: G4.
 - Touches: bloom pass integration, `PostProcess` compute/RT hook equivalents, `LdrColorScratch`.
 - Milestone: bloom and LDR edge/test effects are independently toggleable and do not disturb the base display chain.
+- Follow-up plan: `docs/superpowers/plans/2026-06-02-rtxpt-post-processing-phase-p4-bloom-and-ldr-post-process.md`.
 
 ### Phase P5: Presentation, Debug, and Zoom
 - Goal: G5.
