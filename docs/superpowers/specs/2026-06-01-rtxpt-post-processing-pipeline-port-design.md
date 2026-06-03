@@ -16,8 +16,8 @@ LDR post-process, and final blit. The Diligent port still accumulates in `PathTr
 applies `ToneMapACES` in raygen, writes an `RGBA8` `OutputColor`, and presents through a small blit pass.
 
 Phase 6 therefore starts with the reference-mode display chain. Advanced realtime post-processing
-(stable-plane final merge, NRD, TAA, DLSS/DLSS-RR, Streamline) is specified here as later gated work, but it
-depends on the realtime/stable-plane track from the umbrella spec and must not block the reference-mode
+(stable-plane final merge, NRD, `ISuperResolution` upscaling, DLSS-RR/Streamline) is specified here as later gated
+work, but it depends on the realtime/stable-plane track from the umbrella spec and must not block the reference-mode
 post-processing milestone.
 
 Reference sources are under `D:/RTXPT-fork/Rtxpt/`:
@@ -60,7 +60,7 @@ Realtime target flow, after the realtime/stable-plane track exists:
 
 ```text
 PathTrace / stable-plane final shading writes OutputColor or stable-plane radiance
-  -> NoDenoiserFinalMerge, standalone NRD, TAA, DLSS, or DLSS-RR path
+  -> NoDenoiserFinalMerge, standalone NRD, ISuperResolution temporal upscaling, or DLSS-RR path
   -> ProcessedOutputColor
   -> HDR post-process
   -> ToneMappingPass
@@ -107,10 +107,11 @@ PathTrace / stable-plane final shading writes OutputColor or stable-plane radian
 - Keep the current `RTXPTBlitPass` only as the final swapchain copy or replace it with the existing Diligent
   full-screen helper if that better matches local patterns.
 
-**G6 - TAA and render/display-size split.**
+**G6 - Super resolution and render/display-size split.**
 - Add `TemporalFeedback1`, `TemporalFeedback2`, `CombinedHistoryClampRelax`, motion-vector inputs, and the
-  reference TAA scheduling contract only after the base HDR->LDR chain is stable.
-- Support a future render size distinct from display size so DLSS/TAA/DLSS-RR can share the same target model.
+  `ISuperResolution` source/output contract only after the base HDR->LDR chain is stable.
+- Support a future render size distinct from display size so FSR/DLSS/DirectSR and later DLSS-RR can share the same
+  target model.
 
 **G7 - Denoising guides and no-denoiser final merge.**
 - Port `DenoisingGuidesBaker` and `PostProcess::NoDenoiserFinalMerge` as the bridge from future stable-plane
@@ -191,11 +192,18 @@ PathTrace / stable-plane final shading writes OutputColor or stable-plane radian
 - Milestone: `LdrColor` is the only normal swapchain source.
 - Follow-up plan: `docs/superpowers/plans/2026-06-03-rtxpt-post-processing-phase-p5-presentation.md`.
 
-### Phase P6: TAA and Render/Display Size Split
+### Phase P6: Super Resolution and Render/Display Size Split
 - Goal: G6.
-- Touches: temporal targets, motion-vector contracts, jitter/update flow, render-target resize logic.
-- Milestone: reference/realtime modes can choose between direct accumulation/present and TAA without breaking the
-  base tone-mapped output.
+- Touches: `ISuperResolutionFactory`/`ISuperResolution` creation, source/output size selection, temporal targets,
+  motion-vector contracts, `ISuperResolution::GetJitterOffset()` projection jitter, `ExecuteSuperResolutionAttribs`
+  resource binding, and render-target resize logic.
+- Technical direction: use DiligentEngine's `ISuperResolution` interface for render-size to display-size upscaling
+  (FSR/DLSS/DirectSR provider as available). Do not port original RTXPT TAA as a standalone denoise-only pass; TAA
+  history/jitter concepts should be expressed through the temporal super-resolution path, with a direct present fallback
+  when no super-resolution provider is enabled.
+- Milestone: reference/realtime modes can choose between direct accumulation/present and `ISuperResolution`-backed
+  temporal upscaling without breaking the base tone-mapped output.
+- Follow-up plan: `docs/superpowers/plans/2026-06-03-rtxpt-post-processing-phase-p6-super-resolution-and-render-display-size-split.md`.
 
 ### Phase P7: Denoising Guides and Stable-Plane Merge
 - Goal: G7.
