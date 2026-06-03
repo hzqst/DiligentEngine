@@ -12,7 +12,7 @@ BSDF/sampler fidelity, transmission/nested dielectrics, shadow-origin polish, an
 all have direct source-level counterparts. However, strict RTXPT-fork `PATH_TRACER_MODE_REFERENCE`
 `PathTrace` parity is not complete until the output contract is also moved to the same post-processing flow:
 RTXPT-fork writes raw HDR radiance to `OutputColor`, then runs accumulation, HDR post-process, tone mapping,
-LDR post-process, overlays, and final blit. The Diligent port still accumulates in `PathTracerSample.rgen`,
+LDR post-process, and final blit. The Diligent port still accumulates in `PathTracerSample.rgen`,
 applies `ToneMapACES` in raygen, writes an `RGBA8` `OutputColor`, and presents through a small blit pass.
 
 Phase 6 therefore starts with the reference-mode display chain. Advanced realtime post-processing
@@ -53,7 +53,6 @@ PathTrace writes raw HDR OutputColor
   -> PostProcessPreToneMapping applies optional HDR effects such as bloom
   -> ToneMappingPass writes LdrColor
   -> PostProcessPostToneMapping applies optional LDR effects
-  -> shader debug / zoom / debug line overlays where supported
   -> final blit to swapchain
 ```
 
@@ -65,7 +64,7 @@ PathTrace / stable-plane final shading writes OutputColor or stable-plane radian
   -> ProcessedOutputColor
   -> HDR post-process
   -> ToneMappingPass
-  -> LDR post-process and overlays
+  -> LDR post-process
   -> swapchain
 ```
 
@@ -103,11 +102,10 @@ PathTrace / stable-plane final shading writes OutputColor or stable-plane radian
 - Feature toggles must be independent: disabling bloom or LDR effects must leave accumulation, tone mapping,
   and blit intact.
 
-**G5 - Presentation and diagnostic overlays.**
+**G5 - Presentation.**
 - The normal display source becomes `LdrColor`.
 - Keep the current `RTXPTBlitPass` only as the final swapchain copy or replace it with the existing Diligent
   full-screen helper if that better matches local patterns.
-- Shader debug, zoom, and debug-line overlays are port targets, but each must be optional and capability-gated.
 
 **G6 - TAA and render/display-size split.**
 - Add `TemporalFeedback1`, `TemporalFeedback2`, `CombinedHistoryClampRelax`, motion-vector inputs, and the
@@ -140,7 +138,7 @@ PathTrace / stable-plane final shading writes OutputColor or stable-plane radian
   but the algorithms are not part of this spec.
 - A verbatim Donut/NVRHI framework clone. Passes should be Diligent-native and follow the current sample's
   ownership style.
-- Blocking the reference-mode post-processing milestone on NRD, DLSS, Streamline, shader debug, or zoom.
+- Blocking the reference-mode post-processing milestone on NRD, DLSS, or Streamline.
 
 ## Phase Design
 
@@ -187,11 +185,11 @@ PathTrace / stable-plane final shading writes OutputColor or stable-plane radian
 - Milestone: bloom and LDR edge/test effects are independently toggleable and do not disturb the base display chain.
 - Follow-up plan: `docs/superpowers/plans/2026-06-02-rtxpt-post-processing-phase-p4-bloom-and-ldr-post-process.md`.
 
-### Phase P5: Presentation, Debug, and Zoom
+### Phase P5: Presentation
 - Goal: G5.
-- Touches: final blit, shader debug buffers, zoom/debug-line overlays if ported in this increment.
-- Milestone: `LdrColor` is the only normal swapchain source; diagnostic overlays are optional and visible only when
-  explicitly enabled.
+- Touches: final blit.
+- Milestone: `LdrColor` is the only normal swapchain source.
+- Follow-up plan: `docs/superpowers/plans/2026-06-03-rtxpt-post-processing-phase-p5-presentation.md`.
 
 ### Phase P6: TAA and Render/Display Size Split
 - Goal: G6.
