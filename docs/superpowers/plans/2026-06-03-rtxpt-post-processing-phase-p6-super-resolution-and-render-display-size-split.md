@@ -4,7 +4,9 @@
 
 **Goal:** Add a Diligent-native render-size/display-size split for RTXPT and integrate `ISuperResolution` as the optional temporal upscaling stage before HDR post-processing and tone mapping.
 
-**Architecture:** Keep the P1-P5 `OutputColor -> accumulation -> ProcessedOutputColor -> LdrColor -> blit` chain as the direct fallback, where render size equals display size. When a temporal super-resolution variant is enabled, ray tracing and accumulation run at render size, accumulation writes a render-size HDR input texture, `RTXPTSuperResolutionPass` writes display-size HDR `ProcessedOutputColor`, and the existing HDR bloom/tone-mapping/presentation stages continue at display size. Motion-vector and depth resources are introduced as explicit render-size contracts; reference mode writes primary-hit depth and zero screen motion vectors, while future realtime/stable-plane work can replace the conservative motion data without changing the `ISuperResolution` binding contract.
+> **Post-completion correction (2026-06-03):** Reference PathTracer must not enable external super-resolution, TAA, DLSS, or any other anti-aliasing/upscaling pass. It already uses stochastic subpixel jitter in the path tracer itself, and temporal upscalers add unnecessary noisy history in accumulation mode. This supersedes the Task 5 UI wiring below that attached `RTXPTSuperResolutionSettings` to `RTXPTReferenceUIState`; the SR pass remains available only for future non-reference realtime/stable-plane paths.
+
+**Architecture:** Keep the P1-P5 `OutputColor -> accumulation -> ProcessedOutputColor -> LdrColor -> blit` chain as the direct fallback, where render size equals display size. When a temporal super-resolution variant is enabled on a non-reference path, ray tracing and accumulation run at render size, accumulation writes a render-size HDR input texture, `RTXPTSuperResolutionPass` writes display-size HDR `ProcessedOutputColor`, and the existing HDR bloom/tone-mapping/presentation stages continue at display size. Motion-vector and depth resources are introduced as explicit render-size contracts; Reference PathTracer keeps `ISuperResolution` disabled, uploads `superResolutionActive = 0`, does not schedule the SR pass, and continues to rely only on its own per-sample subpixel jitter.
 
 **Tech Stack:** C++17, HLSL/DXC, Diligent Engine ray tracing, Diligent `ISuperResolutionFactory`/`ISuperResolution`, Diligent texture SRV/UAV/RTV views, ImGui, CMake sample target registration, PowerShell + `rg` verification, reference source under `D:/RTXPT-fork/Rtxpt`, Diligent usage reference in `DiligentSamples/Tutorials/Tutorial27_PostProcessing`.
 
@@ -46,7 +48,7 @@ Read these before editing:
 - P6 may enumerate spatial `ISuperResolution` variants, but the acceptance milestone is the temporal HDR path. Spatial variants are shown as unavailable for the P6 HDR temporal path unless a later task adds an explicit LDR spatial branch.
 - If no temporal super-resolution variant is available, the sample must stay on the direct P1-P5 path with render size equal to display size and a visible disabled reason.
 - P6 must not make `LdrColor` or swapchain presentation depend on super resolution. The final presentation source stays `RTXPTRenderTargets::GetPresentationSRV()`.
-- Reference mode writes conservative guide data: primary-hit depth and zero screen-space motion vectors. Camera, scene, animation, material, light, env-map, render-size, variant, and quality changes reset accumulation and super-resolution history.
+- Reference PathTracer must not expose SR/TAA/AA controls, query provider jitter, change render size for SR, execute `RTXPTSuperResolutionPass`, or reset SR history. It may still write primary-hit depth and zero screen-space motion vectors as render-size resources for future non-reference contracts.
 - Motion-vector quality for moving geometry and stable planes belongs to P7/P8. P6 only creates the resource and binding contract.
 - `ProcessedOutputColor` becomes display-size in P6 when super resolution is active; direct mode keeps render size equal to display size.
 - Do not change tone-mapping operators, bloom math, ray-tracing material/lighting behavior, or final blit shader behavior.
@@ -61,11 +63,11 @@ Read these before editing:
 - Modify: `DiligentSamples/Samples/RTXPT/src/RTXPTPostProcessPipeline.cpp` - initialize SR pass, validate P6 resources, write accumulation to the correct HDR target, execute SR before HDR post-process, and run display-size bloom/tone mapping.
 - Modify: `DiligentSamples/Samples/RTXPT/src/RTXPTRayTracingPass.hpp` - extend `Trace()` to accept depth and motion-vector UAVs.
 - Modify: `DiligentSamples/Samples/RTXPT/src/RTXPTRayTracingPass.cpp` - add raygen dynamic variables for `u_Depth` and `u_ScreenMotionVectors`, bind them in `Trace()`, and dispatch render-size rays.
-- Modify: `DiligentSamples/Samples/RTXPT/assets/shaders/PathTracer/PathTracerSample.rgen` - write primary-hit depth and zero motion vectors, and use provider jitter when SR is active.
+- Modify: `DiligentSamples/Samples/RTXPT/assets/shaders/PathTracer/PathTracerSample.rgen` - write primary-hit depth and zero motion vectors, keep Reference PathTracer on internal stochastic subpixel jitter, and reserve provider jitter for future non-reference SR paths.
 - Modify: `DiligentSamples/Samples/RTXPT/assets/shaders/PathTracer/PathTracerHelpers.hlsli` - keep ray helper signature stable; no file-wide redesign.
 - Modify: `DiligentSamples/Samples/RTXPT/src/RTXPTFrameConstants.hpp` and `assets/shaders/PathTracer/PathTracerShared.h` - rename one padding field to `superResolutionActive`, keep struct size unchanged, and use `PathTracerCameraData::Jitter`.
-- Modify: `DiligentSamples/Samples/RTXPT/src/RTXPTSample.hpp` - add SR UI state, target dimensions, current jitter, elapsed time, and history-reset state.
-- Modify: `DiligentSamples/Samples/RTXPT/src/RTXPTSample.cpp` - update render/display sizing before frame constants, use render-size camera data, wire UI, trace guides, execute SR, and reset histories.
+- Modify: `DiligentSamples/Samples/RTXPT/src/RTXPTSample.hpp` - add target dimensions, current frame descriptor, and elapsed time; do not add Reference UI SR/AA state.
+- Modify: `DiligentSamples/Samples/RTXPT/src/RTXPTSample.cpp` - update render/display sizing before frame constants, use render-size camera data, trace guides, keep Reference SR disabled, skip SR execution, and remove Reference SR/AA controls.
 - Modify: `DiligentSamples/Samples/RTXPT/CMakeLists.txt` - register `RTXPTSuperResolutionPass` and link `Diligent-SuperResolution-static`.
 - Modify: `DiligentSamples/Samples/RTXPT/RTXPT_FORK_MAPPING.md` - map P6 resources and the Diligent `ISuperResolution` owner files.
 - Modify: `docs/superpowers/specs/2026-06-01-rtxpt-post-processing-pipeline-port-design.md` - add this P6 follow-up plan link.
@@ -1501,59 +1503,43 @@ Expected: commit contains only post-process pipeline integration.
 
 ### Task 5: Wire Sample UI, Sizing, Frame Constants, and Render Order
 
+> **Correction:** The current RTXPT sample is Reference PathTracer-only. Implement this task with SR disabled settings, no Reference UI SR/AA state, `superResolutionActive = 0`, and no `RunSuperResolution()` call. The original SR UI snippets below are retained as historical implementation notes for a future non-reference path.
+
 **Files:**
 - Modify: `DiligentSamples/Samples/RTXPT/src/RTXPTSample.hpp`
 - Modify: `DiligentSamples/Samples/RTXPT/src/RTXPTSample.cpp`
 
-- [ ] **Step 1: Add SR state to the sample header**
+- [ ] **Step 1: Keep SR out of Reference UI state**
 
-In `RTXPTSample.hpp`, add `RTXPTSuperResolutionSettings` to `RTXPTReferenceUIState` after bloom fields:
-
-```cpp
-    RTXPTSuperResolutionSettings SuperResolution;
-```
-
-Add private helper declarations:
+In `RTXPTSample.hpp`, keep Reference UI free of `RTXPTSuperResolutionSettings`, AA toggles, provider-jitter helpers, and SR history state. Add only the frame descriptor data needed to preserve the render/display-size contract:
 
 ```cpp
-    void UpdateRenderTargetDimensions(float TimeDeltaSeconds);
-    float2 GetCurrentSuperResolutionJitter() const;
+    RTXPTRenderTargetDimensions   m_CurrentTargetDimensions     = {};
+    RTXPTSuperResolutionFrameDesc m_CurrentSuperResolutionFrame = {};
+    float                         m_LastElapsedTimeSeconds      = 0.0f;
 ```
 
-Add private members:
+Expected: Reference PathTracer cannot enable external SR/TAA/AA through UI state, but still computes render/display dimensions before constants upload.
 
-```cpp
-    RTXPTRenderTargetDimensions    m_CurrentTargetDimensions      = {};
-    RTXPTSuperResolutionFrameDesc  m_CurrentSuperResolutionFrame  = {};
-    float                          m_LastElapsedTimeSeconds       = 0.0f;
-    bool                           m_ResetSuperResolutionHistory  = true;
-```
-
-Expected: sample state can carry the frame descriptor computed before constants upload.
-
-- [ ] **Step 2: Compute render/display dimensions before frame constants**
+- [ ] **Step 2: Compute direct render/display dimensions before frame constants**
 
 Add to `RTXPTSample.cpp`:
 
 ```cpp
 void RTXPTSample::UpdateRenderTargetDimensions(float TimeDeltaSeconds)
 {
-    const SwapChainDesc& SCDesc = m_pSwapChain->GetDesc();
-    const RTXPTRenderTargetFormats Formats;
+    const SwapChainDesc&               SCDesc = m_pSwapChain->GetDesc();
+    const RTXPTRenderTargetFormats     Formats;
+    const RTXPTSuperResolutionSettings DisabledSuperResolution;
 
     m_CurrentSuperResolutionFrame =
-        m_PostProcessPipeline.ResolveSuperResolutionFrameDesc(m_ReferenceUI.SuperResolution,
+        m_PostProcessPipeline.ResolveSuperResolutionFrameDesc(DisabledSuperResolution,
                                                               SCDesc.Width,
                                                               SCDesc.Height,
                                                               Formats.ProcessedOutputColor,
-                                                              m_ResetSuperResolutionHistory || m_ResetAccumulationPending,
+                                                              false,
                                                               TimeDeltaSeconds);
     m_CurrentTargetDimensions = m_CurrentSuperResolutionFrame.Dimensions;
-}
-
-float2 RTXPTSample::GetCurrentSuperResolutionJitter() const
-{
-    return m_CurrentSuperResolutionFrame.Enabled ? m_CurrentSuperResolutionFrame.Jitter : float2{0.0f, 0.0f};
 }
 ```
 
@@ -1564,7 +1550,7 @@ Then in `Update()`, before `UpdateFrameConstants(CurrTime);`, add:
     UpdateRenderTargetDimensions(m_LastElapsedTimeSeconds);
 ```
 
-Expected: frame constants use the same render size and SR state that `Render()` will allocate.
+Expected: frame constants use the same direct render/display size that `Render()` will allocate.
 
 - [ ] **Step 3: Update camera data to use render viewport and display aspect**
 
@@ -1607,7 +1593,7 @@ In `UpdateFrameConstants()`, replace swapchain width/height reads with:
     const float Height = static_cast<float>(m_CurrentTargetDimensions.RenderHeight);
 ```
 
-Replace `MakePathTracerCameraData()` call with:
+Replace `MakePathTracerCameraData()` call with zero provider jitter:
 
 ```cpp
     m_LastFrameConstants.camera = MakePathTracerCameraData(m_Camera,
@@ -1617,16 +1603,16 @@ Replace `MakePathTracerCameraData()` call with:
                                                            m_CurrentTargetDimensions.DisplayHeight,
                                                            m_ReferenceUI.CameraFocalDistance,
                                                            m_ReferenceUI.CameraAperture,
-                                                           GetCurrentSuperResolutionJitter());
+                                                           float2{0.0f, 0.0f});
 ```
 
 Set the SR activation flag:
 
 ```cpp
-    m_LastFrameConstants.ptConsts.superResolutionActive = m_CurrentSuperResolutionFrame.Enabled ? 1u : 0u;
+    m_LastFrameConstants.ptConsts.superResolutionActive = 0u;
 ```
 
-Expected: constants carry render viewport, display aspect, provider jitter, and SR activation state.
+Expected: constants carry render viewport and display aspect while forcing the raygen path to use its own stochastic subpixel jitter.
 
 - [ ] **Step 5: Update render-target creation**
 
@@ -1668,33 +1654,15 @@ In `Render()`, replace the trace call with:
                                m_RenderTargets.GetRenderHeight());
 ```
 
-After successful `RunAccumulation()` and before `RunPreToneMapping()`, add:
+After successful `RunAccumulation()`, go directly to `RunPreToneMapping()`. Do not call `RTXPTPostProcessPipeline::RunSuperResolution()` from the Reference PathTracer render loop.
 
-```cpp
-    const bool SuperResolutionExecuted =
-        m_PostProcessPipeline.RunSuperResolution(m_pImmediateContext,
-                                                 m_RenderTargets,
-                                                 m_CurrentSuperResolutionFrame,
-                                                 m_CameraNearPlane,
-                                                 m_CameraFarPlane,
-                                                 m_CameraVerticalFov);
-    if (!SuperResolutionExecuted)
-    {
-        ClearFallback(float4{0.2f, 0.4f, 1.0f, 1.0f});
-        return;
-    }
-    if (m_CurrentSuperResolutionFrame.Enabled)
-        m_ResetSuperResolutionHistory = false;
-```
-
-Expected render order: trace guides at render size, accumulation, optional temporal SR, HDR post-process, tone mapping, presentation.
+Expected render order: trace guides at render size, accumulation, HDR post-process, tone mapping, presentation.
 
 - [ ] **Step 7: Update `WindowResize()`**
 
 At the start of `WindowResize()` after `UpdateCameraProjection(Width, Height);`, add:
 
 ```cpp
-    m_ResetSuperResolutionHistory = true;
     UpdateRenderTargetDimensions(m_LastElapsedTimeSeconds);
 ```
 
@@ -1714,80 +1682,28 @@ When recreating light-baker resources, keep display-size resources:
                 m_LightsBaker.CreateResources(m_pDevice, m_pEngineFactory, m_CurrentTargetDimensions.DisplayWidth, m_CurrentTargetDimensions.DisplayHeight, m_FeatureCaps.ComputeShaders);
 ```
 
-Expected: swapchain resize resets SR history and keeps display-facing resources aligned.
+Expected: swapchain resize keeps display-facing resources aligned without resetting nonexistent SR history.
 
-- [ ] **Step 8: Reset SR history on invalidating changes**
+- [ ] **Step 8: Remove Reference SR/AA controls and diagnostics**
 
-In `RequestAccumulationReset()`, add:
-
-```cpp
-    m_ResetSuperResolutionHistory = true;
-```
-
-Expected: camera, scene, animation, material, light, env-map, and UI changes reset both accumulation and SR history.
-
-- [ ] **Step 9: Add ImGui controls and diagnostics**
-
-In the post-processing UI section after bloom controls, add:
+Remove the Reference UI controls for jitter anti-aliasing and super resolution. In diagnostics, report the disabled Reference policy explicitly:
 
 ```cpp
-            const auto& SRPass     = m_PostProcessPipeline.GetSuperResolutionPass();
-            const auto& SRVariants = SRPass.GetVariants();
-            if (!SRVariants.empty())
-            {
-                if (ImGui::Checkbox("Enable Super Resolution", &m_ReferenceUI.SuperResolution.Enabled))
-                    RequestAccumulationReset("Super resolution toggled");
-
-                std::vector<const char*> VariantNames;
-                VariantNames.reserve(SRVariants.size());
-                for (const SuperResolutionInfo& Info : SRVariants)
-                    VariantNames.push_back(Info.Name);
-
-                if (ImGui::Combo("Super Resolution Mode",
-                                 &m_ReferenceUI.SuperResolution.ActiveVariantIdx,
-                                 VariantNames.data(),
-                                 static_cast<int>(VariantNames.size())))
-                {
-                    RequestAccumulationReset("Super resolution mode changed");
-                }
-
-                const char* QualityNames[] = {"Max Quality", "High Quality", "Balanced", "High Performance", "Max Performance"};
-                if (ImGui::Combo("Super Resolution Quality",
-                                 reinterpret_cast<Int32*>(&m_ReferenceUI.SuperResolution.OptimizationType),
-                                 QualityNames,
-                                 IM_ARRAYSIZE(QualityNames)))
-                {
-                    RequestAccumulationReset("Super resolution quality changed");
-                }
-
-                const Int32 ActiveIdx = std::clamp(m_ReferenceUI.SuperResolution.ActiveVariantIdx, 0, static_cast<Int32>(SRVariants.size() - 1));
-                if (SRPass.SupportsSharpness(SRVariants[static_cast<size_t>(ActiveIdx)]))
-                    ImGui::SliderFloat("Super Resolution Sharpness", &m_ReferenceUI.SuperResolution.Sharpness, 0.0f, 1.0f);
-            }
+        ImGui::Text("Super resolution: disabled in reference mode");
 ```
 
-In diagnostics, add:
+Expected: users cannot enable external SR/TAA/AA from Reference PathTracer mode.
 
-```cpp
-        const auto& SRStats = m_PostProcessPipeline.GetSuperResolutionPass().GetStats();
-        ImGui::Text("Super resolution: %s", SRStats.LastFrameTemporal ? "temporal" : "direct");
-        ImGui::Text("SR input: %u x %u", SRStats.RenderWidth, SRStats.RenderHeight);
-        ImGui::Text("SR output: %u x %u", SRStats.DisplayWidth, SRStats.DisplayHeight);
-        if (!SRStats.DisabledReason.empty())
-            ImGui::Text("SR disabled: %s", SRStats.DisabledReason.c_str());
-```
-
-Expected: users can enable a temporal provider when available and see direct fallback reasons.
-
-- [ ] **Step 10: Run sample integration grep**
+- [ ] **Step 9: Run sample integration grep**
 
 Run:
 
 ```powershell
-rg -n "UpdateRenderTargetDimensions|m_CurrentTargetDimensions|m_CurrentSuperResolutionFrame|m_ResetSuperResolutionHistory|RunSuperResolution|GetRenderWidth|GetDisplayWidth|Enable Super Resolution|Super Resolution Mode" DiligentSamples/Samples/RTXPT/src/RTXPTSample.*
+rg -n "AccumulationAA|m_ReferenceUI\.SuperResolution|GetCurrentSuperResolutionJitter|m_ResetSuperResolutionHistory|Enable Super Resolution|Super Resolution Mode|RunSuperResolution\(" DiligentSamples/Samples/RTXPT/src/RTXPTSample.cpp DiligentSamples/Samples/RTXPT/src/RTXPTSample.hpp
+rg -n "DisabledSuperResolution|superResolutionActive = 0u|disabled in reference mode" DiligentSamples/Samples/RTXPT/src/RTXPTSample.cpp
 ```
 
-Expected: UI, sizing, render order, and history-reset state are present.
+Expected: the first command returns no matches; the second command shows the direct-mode SR disable points.
 
 - [ ] **Step 11: Commit sample integration**
 
@@ -1962,7 +1878,7 @@ Expected:
 
 - [ ] **Step 7: Runtime smoke with a temporal provider when available**
 
-On a device/backend where `ISuperResolutionFactory` enumerates a temporal variant, enable Super Resolution.
+On a future non-reference path and a device/backend where `ISuperResolutionFactory` enumerates a temporal variant, enable Super Resolution.
 
 Expected:
 
@@ -2002,8 +1918,9 @@ P6 is complete only when all of these are true:
 
 - `RTXPTRenderTargets` stores explicit render and display dimensions.
 - Direct fallback keeps render size equal to display size and preserves the P1-P5 presentation path.
-- Temporal SR mode creates render-size `OutputColor`, `AccumulatedRadiance`, `SuperResolutionInputColor`, `Depth`, and `ScreenMotionVectors`.
-- Temporal SR mode creates display-size `ProcessedOutputColor`, `TemporalFeedback1`, `TemporalFeedback2`, `CombinedHistoryClampRelax`, `LdrColor`, and presentation source.
+- Future non-reference temporal SR mode creates render-size `OutputColor`, `AccumulatedRadiance`, `SuperResolutionInputColor`, `Depth`, and `ScreenMotionVectors`.
+- Future non-reference temporal SR mode creates display-size `ProcessedOutputColor`, `TemporalFeedback1`, `TemporalFeedback2`, `CombinedHistoryClampRelax`, `LdrColor`, and presentation source.
+- Current Reference PathTracer mode never exposes SR/TAA/AA controls, never executes `RTXPTSuperResolutionPass`, keeps render size equal to display size, and uploads `superResolutionActive = 0`.
 - `RTXPTRayTracingPass::Trace()` binds and raygen writes `u_Output`, `u_Depth`, and `u_ScreenMotionVectors`.
 - `PathTracerSample.rgen` uses `camera.Jitter` only when `ptConsts.superResolutionActive != 0`.
 - `RTXPTSuperResolutionPass` loads the Diligent factory, enumerates variants, queries source size, creates `ISuperResolution`, and executes temporal upscaling through `ExecuteSuperResolutionAttribs`.

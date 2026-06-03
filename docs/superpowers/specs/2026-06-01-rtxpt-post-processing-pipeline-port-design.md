@@ -201,8 +201,9 @@ PathTrace / stable-plane final shading writes OutputColor or stable-plane radian
   (FSR/DLSS/DirectSR provider as available). Do not port original RTXPT TAA as a standalone denoise-only pass; TAA
   history/jitter concepts should be expressed through the temporal super-resolution path, with a direct present fallback
   when no super-resolution provider is enabled.
-- Milestone: reference/realtime modes can choose between direct accumulation/present and `ISuperResolution`-backed
-  temporal upscaling without breaking the base tone-mapped output.
+- Milestone: Reference PathTracer remains on direct accumulation/present with no external SR/TAA/DLSS/AA pass; future
+  non-reference realtime/stable-plane modes can choose `ISuperResolution`-backed temporal upscaling without breaking
+  the base tone-mapped output.
 - Follow-up plan: `docs/superpowers/plans/2026-06-03-rtxpt-post-processing-phase-p6-super-resolution-and-render-display-size-split.md`.
 
 ### Phase P7: Denoising Guides and Stable-Plane Merge
