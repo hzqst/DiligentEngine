@@ -63,4 +63,4 @@ serena project index
 serena project health-check
 ```
 
-Do not run build or test commands unless the user explicitly asks for them or they are necessary and approved by current task rules.
+Do not run test or runtime smoke commands unless the user explicitly asks for them.
