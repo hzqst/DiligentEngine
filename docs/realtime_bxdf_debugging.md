@@ -1350,3 +1350,744 @@ Follow-up diagnostic:
   diagnostic color in `DiligentSamples/Samples/RTXPT/assets/shaders/PathTracer`.
 - If the next run still shows exact `FF00FF`, suspect stale shader/runtime output or
   an output path outside the searched PathTracer shader files.
+
+## 2026-06-07: Upstream Parity Candidates After `cf829f`
+
+Context for this pass:
+
+- Known-good DiligentSamples commit: `cf829f3294c517c7046a0e0b200c66f9f5d6c57c`.
+- Current DiligentSamples HEAD during the audit: `913e36e6`.
+- The regression range after `cf829f` contains only a few RTXPT shader/state commits
+  relevant to realtime diffuse:
+  - `a5777c5f`: restore BxDF delta lobe export;
+  - `529f312d`: align shader payload and layout contracts;
+  - `970a7378`: align realtime BxDF and material state;
+  - `1ff5a7b8`: remove realtime diagnostic shader paths.
+- Upstream comparison source: `D:/RTXPT-fork`.
+- This section records candidate differences only. It does not claim the final root
+  cause until a minimal shader probe or revert confirms the causal path.
+
+Files compared in this pass:
+
+- Local:
+  - `DiligentSamples/Samples/RTXPT/assets/shaders/PathTracer/PathState.hlsli`
+  - `DiligentSamples/Samples/RTXPT/assets/shaders/PathTracer/PathPayload.hlsli`
+  - `DiligentSamples/Samples/RTXPT/assets/shaders/PathTracer/PathTracer.hlsli`
+  - `DiligentSamples/Samples/RTXPT/assets/shaders/PathTracer/PathTracerSample.rgen`
+  - `DiligentSamples/Samples/RTXPT/assets/shaders/PathTracer/PathTracerStablePlanes.hlsli`
+  - `DiligentSamples/Samples/RTXPT/assets/shaders/PathTracer/StablePlanes.hlsli`
+  - `DiligentSamples/Samples/RTXPT/assets/shaders/PathTracer/PathTracerClosestHit.rchit`
+  - `DiligentSamples/Samples/RTXPT/assets/shaders/PathTracer/Rendering/Materials/BxDF.hlsli`
+  - `DiligentSamples/Samples/RTXPT/assets/shaders/PostProcessing/RTXPTPostProcess.csh`
+  - `DiligentSamples/Samples/RTXPT/src/RTXPTRayTracingPass.cpp`
+- Upstream:
+  - `D:/RTXPT-fork/Rtxpt/Shaders/PathTracer/PathState.hlsli`
+  - `D:/RTXPT-fork/Rtxpt/Shaders/PathTracer/PathPayload.hlsli`
+  - `D:/RTXPT-fork/Rtxpt/Shaders/PathTracer/PathTracer.hlsli`
+  - `D:/RTXPT-fork/Rtxpt/Shaders/PathTracerSample.hlsl`
+  - `D:/RTXPT-fork/Rtxpt/Shaders/PathTracer/PathTracerStablePlanes.hlsli`
+  - `D:/RTXPT-fork/Rtxpt/Shaders/PathTracer/StablePlanes.hlsli`
+  - `D:/RTXPT-fork/Rtxpt/Shaders/PathTracer/PathTracerNEE.hlsli`
+  - `D:/RTXPT-fork/Rtxpt/Shaders/PathTracer/Rendering/Materials/StandardBSDF.hlsli`
+  - `D:/RTXPT-fork/Rtxpt/ProcessingPasses/PostProcess.hlsl`
+  - `D:/RTXPT-fork/Rtxpt/NRD/DenoiserNRD.hlsli`
+
+Strong candidate: masked vertex-index accessors introduced by `529f312d`.
+
+- `cf829f` and upstream both used the unsafe RTXPT-style vertex arithmetic:
+  - `setVertexIndex()` clears the low bits and ORs the raw index.
+  - `incrementVertexIndex()` does `flagsAndVertexIndex += 1`.
+  - `decrementVertexIndex()` does `flagsAndVertexIndex -= 1`.
+- Current HEAD uses masked helpers:
+  - `setVertexIndex(index)` writes `(index & kVertexIndexBitMask)`.
+  - `incrementVertexIndex()` calls `setVertexIndex(getVertexIndex() + 1u)`.
+  - `decrementVertexIndex()` calls `setVertexIndex(getVertexIndex() - 1u)`.
+- This was introduced in `529f312d`, after the known-good commit.
+- Why it matters:
+  - Prior diagnostics repeatedly found Build storing plane0 with
+    `vertexIndex == 0`.
+  - Fill `FirstHitFromVBuffer()` does `path.setVertexIndex(vertexIndex - 1)`.
+  - With the current masked helper, `0 - 1` becomes `1023` while preserving the
+    path flags.
+  - `FirstHitFromVBuffer()` then checks
+    `HasFinishedSurfaceBounces(path.getVertexIndex() + 1, ...)`, so a wrapped
+    `1023` becomes `1024` and will exceed normal bounce limits immediately.
+  - That can force the path into `terminateAtNextBounce` / terminal Fill logic
+    before the first normal diffuse scatter has a chance to mark
+    `stablePlaneBaseScatterDiff`.
+- Difference versus upstream:
+  - Upstream's unsafe arithmetic can borrow/carry between the low vertex bits and
+    high flag bits. That is ugly, but it is the behavior RTXPT was written around.
+  - The current masked arithmetic prevents flag borrow/carry, but it also makes
+    low-bit underflow/overflow wrap silently inside the 10-bit vertex field.
+- Minimal causality tests:
+  - Temporarily restore the upstream unsafe `PathState` vertex helpers only.
+  - Or guard `FirstHitFromVBuffer()` against `vertexIndex == 0` and make this state
+    impossible before `HasFinishedSurfaceBounces()`.
+  - Instrument `flagsAndVertexIndex` before and after `setVertexIndex(vertexIndex - 1)`
+    in Fill to confirm whether affected pixels become vertex `1023`.
+
+Strong candidate: local NEE stores total radiance as specular average.
+
+- Upstream `PathTracerNEE.hlsli` accumulates direct-light specular average as:
+  - `float4 bsdfThp = bsdf.eval(...)`;
+  - `radiance = bsdfThp.rgb * lightSample.Li`;
+  - `specAvg = bsdfThp.w * Average(lightSample.Li)`;
+  - then both `radiance` and `specAvg` are multiplied by path throughput.
+- Local `PathTracer.hlsli::HandleNEE()` currently combines direct and environment
+  NEE into `directRadiance`, then writes:
+  - `specAvg = preScatterPath.hasFlag(stablePlaneBaseScatterDiff) ? 0.0 :
+    Average(directRadiance)`;
+  - `result.AccumulateRadiance(directRadiance, specAvg)`.
+- This local simplification existed at `cf829f`, so it is not the only regression
+  by itself.
+- Why it became a strong candidate now:
+  - `StablePlane::GetNoisyDiffRadiance()` computes diffuse radiance as:
+    `l.rgb * saturate(1.0 - l.a / Average(l.rgb))`.
+  - If `l.a == Average(l.rgb)`, the diffuse component becomes exactly zero.
+  - If the wrapped/terminal Fill path reaches NEE before any normal diffuse scatter
+    sets `stablePlaneBaseScatterDiff`, ordinary diffuse direct lighting can be stored
+    as fully specular, making the realtime diffuse component black even though noisy
+    RGB radiance exists.
+- This matches the reported symptom more directly than generic "NEE is zero":
+  diffuse can be black because the denoiser split classifies the available radiance
+  as specular.
+- Minimal causality tests:
+  - In local `HandleNEE()`, carry spec average from BSDF evaluation like upstream
+    instead of using `Average(directRadiance)`.
+  - As a diagnostic only, force `specAvg = 0.0` for ordinary non-delta diffuse test
+    pixels and check whether `StablePlane_DiffRadiance` becomes visible.
+  - Visualize `SP.GetNoisyRadianceAndSpecRA().rgb` and `.a` before demodulation:
+    if RGB is nonzero and `.a` tracks `Average(rgb)`, this split is confirmed.
+
+Strong candidate: `970a7378` added full nested-dielectric handling to local realtime
+`HandleHit()`.
+
+- `cf829f` local realtime `HandleHit()` did not yet run the full
+  `HandleNestedDielectrics(surfaceData, path, workingContext)` path.
+- `970a7378` added:
+  - `HandleNestedDielectrics()` for full `SurfaceData`;
+  - volume absorption before nested handling;
+  - `UpdateSurfaceOutsideIoR()`;
+  - transmission-time `UpdateNestedDielectricsOnScatterTransmission()`.
+- Upstream has equivalent nested-dielectric logic, but the local port differs in
+  structure because `SurfaceData` is preloaded in closest-hit and then passed into
+  `PathTracer::HandleHit()`.
+- Why it matters:
+  - `HandleNestedDielectrics()` calls `path.decrementVertexIndex()` on rejected false
+    hits.
+  - The helper takes full `PathState` as `inout`.
+  - Earlier diagnostics in this file already showed suspicious `inout PathState`
+    copy-back behavior around this helper: low vertex bits and later the active bit
+    appeared to change across the accepted-return boundary even when internal probes
+    did not see the same state.
+  - The current masked `decrementVertexIndex()` from `529f312d` makes any reject at
+    vertex zero wrap to `1023` without clearing active flags.
+- Already investigated but still relevant:
+  - The quality-1 reject-limit behavior was brought closer to upstream by falling
+    through to accepted-hit handling when the reject limit is reached.
+  - An explicit empty-interior-list guard was added for
+    `InteriorList::isTrueIntersection()`, but diagnostics still indicated that Fill
+    could reject empty-stack hits unless the caller avoided the problematic helper
+    path.
+- Minimal causality tests:
+  - Keep the helper, but snapshot and restore only the vertex bits around accepted
+    nested handling in both Build and Fill to see whether diffuse recovers.
+  - In Fill only, keep the previous empty-stack shortcut and compare final
+    `PackedNoisyRadianceAndSpecAvg`.
+  - Test `970a7378^` plus only the BxDF changes, if possible, to separate BxDF parity
+    from nested-state parity.
+
+Candidate: current ray-cone propagation is incomplete versus upstream.
+
+- Upstream `UpdatePathTravelledLengthOnly()` does:
+  - `path.rayCone = path.rayCone.propagateDistance(rayTCurrent)`;
+  - then advances scene length.
+- Local `PathTracerStablePlanes.hlsli::UpdatePathTravelledLengthOnly()` currently
+  only advances scene length.
+- Upstream `GenerateScatterRay()` also expands ray cone spread on non-delta scatter:
+  - `path.rayCone = RayCone::make(path.rayCone.getWidth(),
+    min(path.rayCone.getSpreadAngle() +
+    ComputeRayConeSpreadAngleExpansionByScatterPDF(bs.pdf), 2.0 * K_PI))`.
+- Local `GenerateScatterRay()` does not perform this expansion.
+- Why it matters:
+  - Ray cones feed material texture LOD, light-sampler coherence, and some upstream
+    bridge decisions.
+  - This can change BxDF inputs and NEE sampling after the first hit.
+- Why it is not the top suspect:
+  - It does not directly explain an exactly black diffuse split when RGB radiance is
+    otherwise visible.
+  - It is still worth fixing or probing after the vertex/specAvg chain is tested.
+
+Candidate: local `HandleHit()` preloads `SurfaceData` in closest-hit before
+`UpdatePathTravelled()`.
+
+- Upstream loads `SurfaceData` inside `PathTracer::HandleHit()` after
+  `UpdatePathTravelled()`, using the updated `path.rayCone` and vertex index.
+- Local closest-hit calls `LoadCurrentSurfaceData()` before entering
+  `PathTracer::HandleHit()`, and `PathTracer::HandleHit()` then updates path travel.
+- This is an upstream difference, but it was already present in the known-good
+  `cf829f` commit.
+- Conclusion for this pass:
+  - Do not treat this as the primary regression source.
+  - Keep it in mind because it amplifies the ray-cone propagation difference: local
+    realtime material sampling currently cannot use the same post-travel ray cone and
+    vertex index that upstream uses for `Bridge::loadSurface()`.
+
+Candidate already checked: payload size and stable-plane wire layout.
+
+- Current `PathPayload` is still five `uint4` lanes, i.e. 80 bytes.
+- `RTXPTRayTracingPass.cpp` currently sets `MaxPayloadSize` to
+  `sizeof(float) * 40`, i.e. 160 bytes, so the RT payload is not obviously truncated.
+- Local `PathPayload::{pack,unpack}` and `StablePlane::{PackCustomPayload,
+  UnpackCustomPayload}` use the same 5-lane order as upstream, though local code now
+  routes through `RTXPT_PATH_PAYLOAD_UINT4_COUNT` and array conversion helpers.
+- CPU/HLSL `StablePlane` layout was previously audited and remains aligned.
+- Conclusion for this pass:
+  - Keep the layout guards and `MaxPayloadSize` in sync, but current evidence does
+    not point to payload truncation as the diffuse-black cause.
+
+Candidate already checked: stable-plane `FlagsAndVertexIndex` and `PackedCounters`
+are intentionally not restored for base planes.
+
+- Upstream `StoreStablePlane()` calls for the base plane also pass `0, 0` for
+  `flagsAndVertexIndex` and `packedCounters`.
+- Local `PathTracerStablePlanes.hlsli` currently does the same.
+- `FirstHitFromVBuffer()` in both upstream and local does not restore those fields
+  from the stable plane before setting the Fill path state.
+- Conclusion for this pass:
+  - Missing stable-plane flags/counters restore is not a local divergence by itself.
+  - The more suspicious part is how the local masked vertex helpers behave when the
+    stored stable-plane vertex index is zero.
+
+Candidate mostly aligned: BxDF diffuse/specular estimate and denoiser demodulation.
+
+- Current `ActiveBSDF::estimateSpecDiffBSDF()` is now much closer to upstream
+  `StandardBSDF::estimateSpecDiffBSDF()` than the earlier simple
+  `max(diffuse/specular, 0.04)` estimate.
+- Current post-process prepare/final merge behavior matches upstream at the important
+  level:
+  - prepare divides noisy diffuse by `DiffBSDFEstimate`;
+  - final merge multiplies denoised diffuse by the same estimate.
+- Therefore the demodulate/remodulate path is not a strong standalone explanation for
+  black diffuse.
+- However, if `PackedNoisyRadianceAndSpecAvg.a` equals the total noisy radiance
+  average, `GetNoisyDiffRadiance()` will feed zero into this otherwise-correct
+  demodulation path.
+
+Suggested next probes, in priority order:
+
+1. Probe the local Fill stable-plane split directly:
+   - output `SP.GetNoisyRadianceAndSpecRA().rgb`;
+   - output `SP.GetNoisyRadianceAndSpecRA().a`;
+   - output `SP.GetNoisyDiffRadiance()`;
+   - output unpacked `DiffBSDFEstimate`.
+   If RGB is nonzero, alpha is approximately `Average(rgb)`, and diffuse is zero,
+   the `specAvg` classification path is confirmed.
+2. Probe `FirstHitFromVBuffer()` immediately after
+   `path.setVertexIndex(vertexIndex - 1)`:
+   - stable-plane `vertexIndex`;
+   - resulting `path.getVertexIndex()`;
+   - raw `flagsAndVertexIndex`;
+   - result of the subsequent `HasFinishedSurfaceBounces()` check.
+3. Temporarily restore upstream unsafe vertex helpers from `cf829f` and rerun realtime
+   diffuse debug view. This is a causality test, not necessarily the final preferred
+   fix.
+4. Temporarily make local NEE carry upstream-style spec average instead of
+   `Average(directRadiance)`. If diffuse returns while combined radiance is unchanged,
+   the denoiser split was the immediate cause.
+5. After the vertex/specAvg path is proven or ruled out, fix ray cone propagation to
+   match upstream and re-check material/NEE stability.
+
+## 2026-06-07: Possible DXC / Full `inout PathState` Copy-Back Repro Candidate
+
+This note captures the current strongest compiler-sensitive suspicion. It is not yet
+proof of a DXC compiler bug, but it records the local HLSL shape that appears capable
+of reproducing the realtime active-bit loss.
+
+Problem summary:
+
+- RTXPT logic does not show a valid accepted-hit path that should clear
+  `PathFlags::active` after `HandleNestedDielectrics()` accepts a hit.
+- The failure is concentrated at the `HandleNestedDielectrics(surfaceData, path,
+  workingContext)` boundary where a full `PathState` is passed as `inout`.
+- Earlier diagnostics in the same area showed low vertex bits being cleared across the
+  accepted nested-dielectric return boundary.
+- The latest diagnostics showed the raw active bit present before the call and absent
+  immediately after the accepted return.
+- A post-return active-bit restore marker was observed as `#E0E0E0`, proving the
+  restore branch executed, but the final classifier still reported the later
+  after-nested inactive state. This suggests field write/read or later full-struct
+  copy-back behavior remains unstable in this pattern.
+
+Relevant packed flag layout:
+
+```hlsl
+static const uint kVertexIndexBitCount = 10u;
+
+enum class PathFlags
+{
+    active = (1 << 0),
+    // ...
+};
+
+struct PathState
+{
+    // Large mixed payload: packed floats, nested structs, counters, ray cone, etc.
+    uint4        PackOriginId;
+    uint4        PackDirSceneLength;
+    uint2        pack23;
+#if PATH_TRACER_MODE != PATH_TRACER_MODE_BUILD_STABLE_PLANES
+    uint2        pack45;
+#endif
+    InteriorList interiorList;
+    uint         packedCounters;
+    uint         stableBranchID;
+    RayCone      rayCone;
+    uint         pack0;
+    uint         pack1;
+    uint         flagsAndVertexIndex;
+
+    bool isActive()
+    {
+        return (flagsAndVertexIndex & (((uint)PathFlags::active) << kVertexIndexBitCount)) != 0u;
+    }
+};
+```
+
+Problematic caller shape:
+
+```hlsl
+inline void HandleHit(inout PathState path,
+                      SurfaceData surfaceData,
+                      const float3 surfaceEmission,
+                      const float3 rayOrigin,
+                      const float3 rayDir,
+                      const float rayTCurrent,
+                      const WorkingContext workingContext)
+{
+    const uint activeBit   = ((uint)PathFlags::active) << kVertexIndexBitCount;
+    const uint flagsBefore = path.flagsAndVertexIndex;
+
+    const bool rejectedFalseHit =
+        !HandleNestedDielectrics(surfaceData, path, workingContext);
+
+    const uint flagsAfter = path.flagsAndVertexIndex;
+
+    // Observed in FillStablePlanes:
+    // (flagsBefore & activeBit) != 0
+    // (flagsAfter  & activeBit) == 0
+    // rejectedFalseHit == false
+    //
+    // In this state, NEE is skipped because path.isActive() is false.
+    if (!rejectedFalseHit && !path.isActive())
+    {
+        // Diagnostic marker: accepted nested return lost active bit.
+    }
+}
+```
+
+Callee shape that should not clear active on accepted return:
+
+```hlsl
+inline bool HandleNestedDielectrics(inout SurfaceData surfaceData,
+                                    inout PathState path,
+                                    const WorkingContext workingContext)
+{
+#if RTXPT_NESTED_DIELECTRICS_QUALITY > 0
+    if (surfaceData.shadingData.mtl.isThinSurface())
+        return true;
+
+    const uint nestedPriority =
+        surfaceData.shadingData.mtl.getNestedPriority();
+
+    const bool trueIntersection =
+        path.interiorList.isTrueIntersection(nestedPriority);
+
+    if (!trueIntersection)
+    {
+        const uint maxRejectedHits =
+            GetMaxRejectedDielectricHits(RTXPT_NESTED_DIELECTRICS_QUALITY);
+
+        if (path.getCounter(PackedCounters::RejectedHits) < maxRejectedHits)
+        {
+            path.incrementCounter(PackedCounters::RejectedHits);
+            path.interiorList.handleIntersection(
+                surfaceData.shadingData.materialID,
+                nestedPriority,
+                surfaceData.shadingData.frontFacing);
+            path.SetOrigin(ComputeRayOrigin(
+                surfaceData.shadingData.posW,
+                -surfaceData.shadingData.faceNCorrected));
+            path.decrementVertexIndex();
+            return false;
+        }
+
+#if RTXPT_NESTED_DIELECTRICS_QUALITY == 2
+        path.terminate();
+        return false;
+#endif
+    }
+
+    const float outsideIoR =
+        ComputeOutsideIoR(path.interiorList,
+                          surfaceData.shadingData.materialID,
+                          surfaceData.shadingData.frontFacing);
+    UpdateSurfaceOutsideIoR(surfaceData, outsideIoR);
+#endif
+
+    // Accepted hit path reaches this return. There is no explicit path.terminate()
+    // or active-bit clear here.
+    return true;
+}
+```
+
+Why this is suspicious:
+
+- `PathState` is a large struct with conditional fields and nested structs.
+- The callee mutates only selected `PathState` members on rejected-hit paths, while the
+  accepted path mostly reads `path.interiorList` and updates `surfaceData`.
+- The caller observes `flagsAndVertexIndex` changing across an accepted `inout`
+  function return even though the accepted path has no matching active-bit clear.
+- Bit-level diagnostics around the same boundary previously found vertex-index bits
+  being cleared, which points at the same packed field rather than at normal RTXPT
+  path termination.
+
+Current engineering conclusion:
+
+- Treat this as a high-probability compiler-sensitive HLSL pattern:
+  full `inout PathState` copy-back around nested dielectric handling.
+- Do not yet call it a proven DXC bug without a smaller standalone shader reduction
+  and optimization-level comparison.
+- Preferred local fix direction: stop passing the full `PathState` into
+  `HandleNestedDielectrics()`. Pass only the required fields (`InteriorList`,
+  rejected-hit counter, origin update, vertex-index update, outside IoR / accepted
+  result) and apply changes explicitly in the caller.
+
+## 2026-06-07: Workaround Trial - Avoid Full `PathState` `inout`
+
+Follow-up after DXC upgrade:
+
+- Stable DXC `v1.9.2602.24` did not change the realtime probe result.
+- Preview DXC `v1.10.2605.24` did not change the realtime probe result.
+- Therefore the next local experiment is an engineering workaround rather than
+  another compiler-version probe.
+
+Workaround shape:
+
+- `HandleNestedDielectrics()` no longer receives the full `PathState` as `inout`.
+- It receives only the small state it needs to inspect: `InteriorList` and the
+  rejected-hit counter.
+- It returns a `NestedDielectricsResult` containing explicit copy-back fields:
+  updated `InteriorList`, rejected-hit counter, optional origin update, optional
+  vertex-index decrement, optional path termination, accepted/rejected result, and
+  outside IoR.
+- The caller applies those fields to `path` directly after the call.
+
+Validation completed so far:
+
+- Direct DXC compile of `PathTracerSample.rgen` with
+  `PATH_TRACER_MODE=PATH_TRACER_MODE_FILL_STABLE_PLANES` succeeds with only the
+  known payload-qualifier warning.
+- Direct DXC compile of `PathTracerSample.rgen` with
+  `PATH_TRACER_MODE=PATH_TRACER_MODE_BUILD_STABLE_PLANES` succeeds with only the
+  known payload-qualifier warning.
+- `RTXPT` target builds successfully in `build/x64/Debug`.
+
+Runtime interpretation for the active diagnostic state:
+
+- If output changes from `#E0E0E0` to cyan/green/red/blue-class markers, then the
+  full-`PathState` `inout` boundary was at least part of the trigger.
+- If output remains `#E0E0E0`, then active-bit loss is not caused solely by
+  `HandleNestedDielectrics()` taking full `PathState` as `inout`; continue tracing
+  the next write/read boundary after the restore marker.
+
+Follow-up result:
+
+- After the small-field `NestedDielectricsResult` workaround, the realtime output
+  still reported the old `#E0E0E0` diagnostic.
+- This means the restore branch still executes, but the final Fill path still reaches
+  the inactive handling path.
+- The next probe replaces the single restore marker with an active-state stage code
+  in `StableRadiance.w`, so post-process debug mode 0 can identify the first point
+  where the restored active bit disappears.
+
+Current stage-code color map:
+
+- Green: code `2`; direct active bit is visible immediately after restore.
+- Cyan: code `3`; direct active bit survives through the emission block.
+- Blue: code `4`; direct active bit survives through `isTerminatingAtNextBounce()`.
+- Blue-cyan: code `5`; the final inactive branch was entered while the direct active
+  bit was still set, pointing at `PathState::isActive()` / `hasFlag()` or compiler
+  read behavior rather than an actual bit clear.
+- Lime: code `6`; execution reached immediately before evaluating
+  `path.isTerminatingAtNextBounce()`, but the following after-call stage did not
+  overwrite the code. This points at the `isTerminatingAtNextBounce()` expression or
+  the following control-flow / UAV-write visibility.
+- Red: code `12`; direct active bit is missing immediately after the restore write.
+- Magenta: code `13`; direct active bit is lost before/through the emission block.
+- Yellow: code `14`; direct active bit is lost during/after
+  `isTerminatingAtNextBounce()`.
+- Orange: code `15`; direct active bit is lost only when entering the final
+  inactive branch.
+- Pink: code `16`; same-block overwrite immediately after code `3` was observed.
+  If code `3` remains instead of code `16`, the issue is no longer
+  `isTerminatingAtNextBounce()`; it points at same-address UAV write ordering,
+  write competition, or compiler handling of consecutive debug writes.
+
+Observed follow-up:
+
+- Runtime color `#00BFE0` is closest to the cyan/code-`3` class.
+- Interpretation: the restored active bit survives through the emission block.
+- Since the prior probe did not advance to code `4/14/15`, the next split writes
+  stage codes using a saved `pixelPos` instead of `path.GetPixelPos()` and inserts
+  code `6` immediately before `path.isTerminatingAtNextBounce()`.
+- Runtime still reported `#00BFE0` after the saved-`pixelPos` / code-`6` probe.
+  The next split writes code `16` immediately after code `3` in the same block to
+  determine whether a second same-address debug write can become visible at all.
+- Runtime still reported `#00BFE0` after the same-block code-`16` write. This makes
+  the pixel-level `StableRadiance.w` trace suspect: other Fill paths for the same
+  pixel can race and leave code `3` as the final visible value.
+- The next split writes the same stage code into the current stable plane's
+  `PackedNoisyRadianceAndSpecAvg` as a plane-local marker (`.r = code`, `.a = 16`).
+  Post-process debug mode 0 now gives this plane-local marker priority over
+  `StableRadiance.w`.
+- Runtime still reported `#00BFE0`, which means the previous frame could still have
+  been reading the `StableRadiance.w` fallback or missing the plane-local marker on
+  plane0.
+- The current split writes the plane-local marker both to `path.getStablePlaneIndex()`
+  and to plane0. Post-process debug mode 0 no longer falls back to `StableRadiance.w`:
+  absence of a plane-local marker is shown as dark gray.
+- Runtime still reported `#00BFE0` with fallback disabled. This could mean true
+  plane-local code `3`, but it can also be a false-positive because the first
+  plane-local marker signature only checked `.a > 8`.
+- The current split strengthens the marker signature to
+  `.r = code, .g = 13, .b = 7, .a = 16`. Post-process debug mode 0 only treats a
+  plane as a trace marker when all three signature channels match.
+- Runtime still reported `#00BFE0`, so the marker is real, but the "last write wins"
+  float marker remains vulnerable to write competition: a path that only reaches the
+  emission-stage write can race with a path that reaches later stages.
+- The current split stores the trace in `StablePlane.PackedCounters` using
+  `InterlockedMax()`. The high byte carries signature `0xD1`, and the low byte is a
+  monotonic stage code. Post-process debug mode 0 reads this integer trace first.
+
+Current atomic stage-code color map:
+
+- Green: code `20`; active bit is visible immediately after restore.
+- Cyan: code `30`; active bit survives through the emission block.
+- Pink: code `40`; same-block write immediately after code `30` is visible.
+- Lime: code `50`; execution reaches immediately before
+  `path.isTerminatingAtNextBounce()`.
+- Blue: code `60`; active bit survives through `isTerminatingAtNextBounce()`.
+- Blue-cyan: code `70`; the final inactive branch was entered while the direct
+  active bit was still set.
+- Red: code `120`; active bit is missing immediately after restore.
+- Magenta: code `130`; active bit is lost before/through the emission block.
+- Yellow: code `140`; active bit is lost during/after
+  `isTerminatingAtNextBounce()`.
+- Orange: code `150`; direct active bit is lost only when entering the final
+  inactive branch.
+
+Follow-up split:
+
+- Plane-local atomic trace still showed cyan/code `30`.
+- The current shader no longer writes plane-local code `30` or code `40` from
+  `HandleHit()`. It writes code `50` directly when the emission-after-active test
+  succeeds.
+- Therefore any remaining cyan/code `30` in the next run indicates stale/foreign
+  trace data, a shader-reload problem, or a different writer still producing that
+  signature outside the currently inspected `HandleHit()` path.
+- Follow-up still showed cyan. Current source and runtime shader copies no longer
+  contain a plane-local code-`30` writer, so the next check changes post-process'
+  code-`30` color from cyan to red. If cyan remains after this, the post-process
+  shader itself is stale or not reloaded.
+- User confirmed the Debug executable path is
+  `D:/DiligentEngine-hzqst/build/x64/Debug/DiligentSamples/Samples/RTXPT/Debug/RTXPT.exe`.
+- Runtime still showed cyan after code-`30` was changed to red. The next probe adds
+  `RTXPT_DEBUG_FINAL_MERGE_SENTINEL=1` in `RTXPTPostProcess.csh`, which forces
+  plane0 final-merge debug pixels with surfaces to pure red and returns immediately.
+  If cyan remains, the observed frame is not produced by this final-merge debug
+  branch.
+- Verification: `cmake --build build/x64/Debug --config Debug --target RTXPT`
+  succeeded, and the source/runtime `RTXPTPostProcess.csh` SHA256 hashes match:
+  `46E8129E93E4056FFB4E989524C40D72D9F2583BFA783F200DDC6F1758A35AFA`.
+  The runtime copy under the confirmed Debug executable directory contains the
+  sentinel.
+
+## 2026-06-07: Root Cause Confirmed — DXC Miscompilation of Realtime `HandleHit` (Resolution)
+
+This section supersedes the long "plane0 `vertexIndex == 0` / active-bit lost" symptom
+chase above. Using the known-good rollback `cf829f` as an anchor, the realtime
+diffuse/non-reflective black-out was bisected and root-caused, and the tree was returned to
+a working-opaque configuration.
+
+### Bisection result
+
+- Known-good DiligentSamples commit: `cf829f3294c517c7046a0e0b200c66f9f5d6c57c` — realtime
+  opaque/diffuse correct; realtime nested dielectrics / transmission were not yet ported.
+- Regression range `cf829f..970a7378`. Reference mode is correct throughout, so the BxDF
+  componentization commits (eval/sample math) are sound; the black-out is realtime-only.
+- The realtime diffuse black-out is introduced by `970a7378` ("align realtime BxDF and
+  material state"), which added full nested-dielectric handling to realtime
+  `PathTracer::HandleHit`: volume absorption + `HandleNestedDielectrics(inout SurfaceData,
+  inout PathState)` + the false-hit early-return.
+- `529f312d`'s masked vertex accessors (`setVertexIndex`/`incrementVertexIndex`/
+  `decrementVertexIndex`) were tested and are NOT the trigger. They were still reverted to
+  the upstream `+= 1 / -= 1 / raw-OR` form because that is the correct port shape
+  (matches `D:/RTXPT-fork`).
+
+### Root cause = DXC miscompilation, not a fixable logic bug
+
+Decisive observation: an opaque primary hit is classified thin
+(`Bridge::isThinSurface` = thin-flag OR no-transmission) and has an empty interior list, so
+it executes NONE of the nested-dielectric code (the `if (!mtl.isThinSurface())` guard and the
+`if (!interiorList.isEmpty())` volume guard are both false). Yet merely having that code
+present in `HandleHit`'s body blacks out opaque. DXC compiles all branches of `HandleHit`;
+the presence of the nested-dielectric branch corrupts codegen of the path's packed
+`flagsAndVertexIndex` (active bit / vertex index), so the primary diffuse stable plane is
+never recorded → black. This is exactly the "active bit lost across the boundary, but no
+internal probe sees the clear" signature chased above — it was never a runtime data-flow
+bug, it was codegen.
+
+Experiment table (only the **presence of nested-dielectric code in `HandleHit`'s body**
+toggles opaque; inline-vs-helper and masked-vs-upstream accessors do not):
+
+| HandleHit nested-dielectric code | Vertex accessors | Opaque |
+|---|---|---|
+| absent (`cf829f`)                                   | upstream | OK    |
+| present — `HandleNestedDielectrics(inout)` call (`970a7378`) | masked   | BLACK |
+| absent (experimental revert)                        | masked   | OK    |
+| present — inlined directly on `path`                | masked   | BLACK |
+| present — inlined; scatter helper also inlined      | masked   | BLACK |
+| present — inlined directly on `path`                | upstream | BLACK |
+| absent (current resolution)                         | upstream | OK    |
+
+Inlining (removing the nested `inout PathState` boundary so `path` only crosses
+`HandleHit`'s own boundary) did NOT help — confirming the trigger is the code's presence in
+the compiled function, not the `inout` copy-back per se. Consistent with everything above:
+the symptom moves with code shape and is unaffected by DXC stable/preview version swaps.
+
+### Current code state (the resolution)
+
+- `PathTracer::HandleHit` contains NO realtime nested-dielectric handling — cf829f-equivalent.
+  A `NOTE:` comment in the function body records why it must not be re-added.
+- Removed the now-unreachable realtime helpers `HandleNestedDielectrics(inout SurfaceData,
+  inout PathState)` and `UpdateSurfaceOutsideIoR` (uncalled → not reachable from any entry
+  point → not compiled → zero effect on the shader output; pure cleanup). The reference-mode
+  `HandleNestedDielectrics(RTXPTMaterialHitPayload, ...)` overload in
+  `PathTracerNestedDielectrics.hlsli` is untouched.
+- `UpdateNestedDielectricsOnScatterTransmission` (scatter path, `GenerateScatterRay`) is kept
+  and still called; it only affects transmission scatter and does not break opaque.
+- `PathState` vertex accessors reverted from `529f312d`'s masked read-modify-write back to the
+  upstream `flagsAndVertexIndex += 1 / -= 1` form.
+- Result: realtime opaque/diffuse correct (user-confirmed). Realtime transmission through
+  nested dielectrics is DEFERRED — same capability level as `cf829f`.
+
+### Do NOT
+
+Do not re-add nested-dielectric handling to realtime `HandleHit` until the miscompilation is
+resolved. It will black out opaque again regardless of how it is written (helper or inline,
+masked or upstream accessors). The earlier "eliminate the inout copy-back" attempts are dead
+ends for this symptom.
+
+### Two root-fix paths for realtime transmission
+
+1. Minimal DXC repro + report: build a standalone shader reproducing "a compiled-but-not-
+   executed code block in a function corrupts an adjacent packed bitfield in the same
+   struct", diff across `-O` levels and DXC versions, and file a DXC issue. This is the
+   cleanest proof and unblocks an upstream fix.
+2. Refactor `PathState` packing: change the representation of `flagsAndVertexIndex` and the
+   `#if RTXPT_NESTED_DIELECTRICS_QUALITY`-conditional members (e.g., split the active/vertex
+   bits out of the shared word, or avoid the masked read-modify-write pattern in the
+   compiled-but-skipped branch) so the miscompiled pattern is avoided, then re-introduce
+   nested-dielectric handling in realtime `HandleHit` and re-verify opaque + transmission.
+
+## 2026-06-07 (cont.): Path #2 Implemented — Opaque Fixed; Realtime Transmission Still Black (codegen-class)
+
+Root-fix path #2 above (refactor `PathState` packing) was implemented and **confirmed to resolve the
+opaque/diffuse black-out**. Realtime transmission was then investigated extensively and remains black; it
+is now isolated to the FILL pass and bears the same "logic faithful, behavior wrong" signature as the
+opaque DXC miscompilation. This section supersedes the "Do NOT re-add" note above for the opaque case
+(Gate 1 made re-adding safe). Details below for the next session.
+
+### What was implemented and committed (preserves the opaque fix)
+
+All in `DiligentSamples/Samples/RTXPT/assets/shaders/PathTracer/`:
+
+1. **Gate 1 — `PathState` packing split** (`PathState.hlsli`, `PathPayload.hlsli`). The shared packed word
+   `flagsAndVertexIndex` was split into two independent struct members `flags` (PathFlags region, bits
+   [10..31]) and `vertexIndex` (low 10 bits). All accessors (`hasFlag`/`setFlag`/`clearScatterEventFlags`/
+   `get|setStablePlaneIndex`/`get|set|increment|decrementVertexIndex`) operate on the de-aliased members.
+   The single 32-bit wire layout is unchanged — the two members are recombined only at the
+   `PathPayload::pack`/`unpack` boundary (`packed[4].w = flags | (vertexIndex & kVertexIndexBitMask)`), so
+   cross-pass/wire compatibility is preserved. This de-aliasing removes the intra-word read-modify-write
+   pattern DXC was miscompiling.
+2. **Gate 2 — nested-dielectric handling restored to realtime `HandleHit`** (`PathTracer.hlsli`), verbatim
+   from `970a7378` (volume absorption + `HandleNestedDielectrics(inout SurfaceData, inout PathState)` +
+   false-hit early-return; `volumeAbsorption` fed into `StablePlanesHandleHit`), plus the two helpers
+   `UpdateSurfaceOutsideIoR` and `HandleNestedDielectrics`. On top of Gate 1's packing, **opaque shading
+   stays correct** (user-confirmed) → the DXC miscompilation is resolved.
+3. **`getDeltaLobeIndex` fix** (`PathTracer.hlsli`, `MakeBSDFSample`). Non-delta lobes now map to the
+   invalid sentinel `0xFFFFFFFF` (matching upstream `IBSDF::getDeltaLobeIndex`), not `0`. Consumed by
+   `StablePlanesOnScatter` via `StablePlanesAdvanceBranchID`; with `0` a non-delta scatter produced a
+   valid-looking branchID and corrupted FILL branch tracking. **Correct and kept**, but did NOT fix the
+   transmission black on its own.
+
+Result: realtime **opaque/diffuse correct**, realtime **metal reflection correct** (via PSR on plane 0).
+Realtime **transmission (glass) still black**.
+
+### Realtime transmission — investigation & current localization
+
+This feature **never worked** in the port (cf829f lacked it; `970a7378` added it but the opaque black-out
+hid that it was broken). So this is completing an unfinished port, not fixing a regression.
+
+User tests with the **denoiser OFF** → final output = `StablePlanes::GetAllRadiance` =
+`StableRadiance + Σ_plane GetNoisyRadiance().xyz` (raw radiance; it does NOT use `specAvg`). Decisive probe
+results:
+
+- **Per-pixel false-color of the stable-plane buffer** (R = plane0 has radiance; G = a secondary plane
+  idx>0 is LAID i.e. valid branchID; B = a secondary plane is FILLED i.e. has radiance): glass spheres are
+  **GREEN** → BUILD **lays** the transmission stable plane behind the glass, but FILL **never fills** any
+  secondary plane (no B anywhere). Diffuse spheres are RED (plane0 filled), as expected.
+- **Magenta marker on `StablePlanesOnScatter` transition onto a secondary plane: never fired on glass** →
+  the FILL path's advanced `stableBranchID` never matches a secondary plane's stored branchID; the path
+  never routes onto / deposits into the transmission plane.
+- **Green marker on any FILL hit past the base plane (`BouncesFromStablePlane >= 1`): never fired on
+  glass** → the FILL path does not reach a surface behind the glass.
+
+Ruled OUT (each by a targeted probe): NEE spec/diffuse demodulation (the no-denoiser path ignores
+`specAvg`, so the early `specAvg=0` probe was a no-op — the demodulation hypothesis from earlier in this
+doc was never actually exercised in the denoiser-off config); volume absorption (shared with the working
+reference path in `PathTracerSample.rgen`); `ValidateNaNs` (port runs it, upstream has it `#if 0` —
+disabling did not help; an independent divergence, not this bug); BUILD plane laydown (correct — plane is
+laid); `_activeStablePlaneCount` (defaults to `kRTXPTStablePlaneCount=3`), `PSDDominantDeltaLobe` (glass
+material sets it = 0 → P1=1, dominant follows transmission), `cStablePlaneMaxVertexIndex` (15 both),
+initial `stableBranchID` (1 both) — all faithful.
+
+Two deep cross-repo agent traces (FILL transmission scatter, BSDF sample/eval, lobe componentization,
+branchID lifecycle, `StablePlanesOnScatter`/`FirstHitFromVBuffer`/`CommitDenoiserRadiance`) both concluded
+the FILL transmission **logic is faithful to upstream** `D:/RTXPT-fork`. The only concrete divergence found
+was the `getDeltaLobeIndex` sentinel (fixed, insufficient).
+
+### Conclusion / next session
+
+Everything faithful + still broken = the **same signature as the opaque DXC miscompilation** (logic
+correct, codegen wrong). The realtime FILL `HandleHit`/`GenerateScatterRay` now contains the
+nested-dielectric + delta-transmission scatter code; the working hypothesis is that this corrupts the
+codegen of some packed FILL path-state (candidates: `stableBranchID`, `interiorList`, or the flags word
+again) so the FILL branch traversal / refraction misbehaves at runtime despite correct source — mirroring
+how the opaque path was corrupted before Gate 1.
+
+Recommended next steps (source-level diffing is exhausted):
+
+1. **GPU capture (RenderDoc/PIX)** of a glass pixel: read the stable-plane header (per-plane branchIDs) and
+   the FILL path state to get ground truth — does the FILL path physically refract through the glass, and
+   what `stableBranchID` does it carry vs the stored plane branchIDs? This distinguishes codegen corruption
+   from a remaining logic gap.
+2. If codegen: apply the Gate-1-style mitigation to whichever FILL packed field the capture implicates
+   (de-alias it / change its representation), or build a minimal DXC repro and report upstream.
+3. Keep the `getDeltaLobeIndex` fix regardless.
+
+Do NOT re-chase: demodulation, volume, `ValidateNaNs`, BUILD laydown, or the branchID/lobe-index *values*
+(all verified faithful). The open question is purely **why FILL does not route the path through the glass
+to fill the plane BUILD laid**, and the evidence points at codegen, not source logic.
