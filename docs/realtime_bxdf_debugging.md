@@ -2091,3 +2091,42 @@ Recommended next steps (source-level diffing is exhausted):
 Do NOT re-chase: demodulation, volume, `ValidateNaNs`, BUILD laydown, or the branchID/lobe-index *values*
 (all verified faithful). The open question is purely **why FILL does not route the path through the glass
 to fill the plane BUILD laid**, and the evidence points at codegen, not source logic.
+
+## 2026-06-08: Gate 3 (de-alias `stablePlaneIndex`) — implemented, TESTED, RULED OUT
+
+Sharper symptom (vs reference screenshot): the **smooth/clear** glass sphere (top-right) is fully black,
+while the **rough/frosted** sphere renders (noisy). Rough transmission is a non-delta lobe handled in place
+on plane 0; smooth transmission is a **delta** lobe needing a secondary stable plane → the break is
+specifically the **delta-transmission secondary-plane path**, matching the earlier localization.
+
+**Four fresh parallel cross-repo audits** (StablePlanes infra / branchID round-trip; BxDF delta-lobe
+transmission; FILL transition `FirstHitFromVBuffer`+`StablePlanesOnScatter`; BUILD laydown
+`StablePlanesHandleHit`/`SplitDeltaPath` + final merge `GetAllRadiance`) **all re-confirmed the realtime
+shader logic is faithful to upstream** `D:/RTXPT-fork`. Notably the suspected
+`deltaLobeCount = max(cMaxDeltaLobes - 1, deltaLobeCount)` is **faithful** — upstream uses `max` too (not a
+min→max inversion).
+
+**Gate 3 change** (the one aliased field Gate 1 left behind): `stablePlaneIndex` lived as a 2-bit subfield
+(bits 24..25) inside the shared `flags` word, read/written by masked RMW. `StablePlanesOnScatter` is the
+only site that writes it with a **non-zero** value, **interleaved with four `setFlag` RMWs on that same
+word** — identical intra-word aliasing signature to the opaque `flagsAndVertexIndex` bug; and
+`CommitDenoiserRadiance` uses `getStablePlaneIndex()` as the radiance write-address selector. Opaque/metal
+only ever set the index once (to 0, at init), never during the interleaved transition → explains why they
+were unaffected. Fix: split `stablePlaneIndex` into its own `PathState` member; recombine into
+`packed[4].w` bits 24..25 only at the `PathPayload::pack/unpack` boundary. Wire format **byte-identical**
+(verified: FILL ray round-trip and BUILD exploration `PackCustomPayload` lane-copy both preserve
+`packed[4].w`). Files: `PathState.hlsli`, `PathPayload.hlsli`.
+
+**RESULT: top-right glass STILL BLACK.** Opaque/metal remain correct (no regression). → `stablePlaneIndex`
+aliasing is **NOT** the cause. Kept anyway as a harmless, Gate-1-aligned de-alias that removes a latent
+aliasing pattern and rules out the last masked sub-field of `flags`.
+
+### Conclusion (updated)
+
+Source-level diffing is now **exhausted**: every stable-plane shader cluster audited faithful, AND both
+remaining `flags`-aliased sub-fields (`vertexIndex` in Gate 1, `stablePlaneIndex` in Gate 3) de-aliased
+with no effect on transmission. This **strongly confirms the codegen-class diagnosis**; the next ground
+-truth step is **GPU capture (RenderDoc/PIX)** of a smooth-glass pixel (read per-plane branchIDs + FILL
+path state: does FILL physically refract through the glass, and what `stableBranchID` does it carry vs the
+stored plane branchIDs?). Add to **Do NOT re-chase**: `stablePlaneIndex` aliasing (Gate 3), and the four
+audited clusters above.
