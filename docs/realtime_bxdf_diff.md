@@ -192,20 +192,20 @@ transmission scatter math itself.
    transmission keeps the upstream/realtime every-other-vertex increment guard to
    avoid overdarkening diffuse volumes.
 
+4. **`GenerateScatterRay` omitted upstream scatter side effects.** Synced on
+   2026-06-08: non-delta scatter now expands `path.rayCone` spread angle using
+   `ComputeRayConeSpreadAngleExpansionByScatterPDF`, clamped to `2*pi`, and every
+   valid scatter sets `PathFlags::enableThreadReorder`.
+
+5. **Reference used an inlined single-overload `GenerateScatterRay`.** Synced on
+   2026-06-08: local now matches the upstream split shape with a BSDF-sample
+   consumer overload plus a sampling overload. The local `BSDFSample.wi` naming and
+   `MakeBSDFSample.deltaLobeIndex` FILL fix are preserved.
+
 ### Remaining confirmed divergences from upstream (with effect assessment)
 
-1. **`GenerateScatterRay` omits a couple of upstream side effects.** The local
-   port does not expand `path.rayCone` spread angle on non-delta scatter and does
-   not set `PathFlags::enableThreadReorder` (cf. upstream `PathTracer.hlsli:292/341`).
-   These affect texture LOD / firefly-K growth / thread reordering, not whether a
-   transmission lobe is sampled.
-
-2. **Reference uses an inlined single-overload `GenerateScatterRay`** that consumes
-   pre-generated samples and calls `SampleBSDF` directly, whereas upstream splits
-   into a sampler overload + a `GenerateScatterRay(bs, …)` consumer. Same net math.
-   `MakeBSDFSample.deltaLobeIndex` carries the documented FILL fix
-   (`PathTracer.hlsli:365`): non-delta → `0xFFFFFFFF`, delta transmission → `0`,
-   delta reflection → `1`.
+No confirmed divergences remain in the compared reference `GenerateScatterRay`
+scatter-flow slice after the 2026-06-08 syncs above.
 
 ### Where transmission most plausibly breaks (prioritized suspects for next session)
 
