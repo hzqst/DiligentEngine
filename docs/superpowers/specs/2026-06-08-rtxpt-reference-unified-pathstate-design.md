@@ -4,181 +4,180 @@ Date: 2026-06-08
 
 ## Purpose
 
-Move the Diligent RTXPT reference ray tracing variant toward the upstream
-RTXPT reference execution model without replacing the Diligent scene, material,
-lighting, or resource binding bridge.
+Move the Diligent RTXPT reference variant toward the upstream RTXPT reference
+execution model by authoring a reference path through the local `PathState`
+spine.
 
-The target is option B from the design discussion:
+This is not a direct reuse of the current realtime spine. The current shader
+tree has two mutually exclusive compile universes:
 
-- `PATH_TRACER_MODE_REFERENCE` uses `PathPayload` and `PathState`.
-- Reference closest-hit and miss shaders update the path through local
-  `PathTracer::HandleHit` and `PathTracer::HandleMiss`.
-- Reference raygen drives the same `nextHit`, `postProcessHit`, and
-  `CommitPixel` style loop used by the upstream reference path.
-- Diligent-native bridge adaptation remains in place for material data,
-  geometry fetches, environment maps, light resources, and render target
-  bindings.
+- reference mode compiles a flattened raygen loop and a material-hit payload;
+- realtime build/fill modes compile `PathState`, `PathPayload`, stable planes,
+  `PathTracer::HandleHit`, `PathTracer::HandleMiss`, and `CommitPixel`.
+
+The design therefore explicitly chooses this route:
+
+- make the spine compile in `PATH_TRACER_MODE_REFERENCE`;
+- add reference-specific exits for radiance, depth, and motion outputs;
+- keep stable-plane writes disabled for reference;
+- preserve the current reference behavior first;
+- only then remove the flattened raygen loop.
 
 ## Background
 
-`docs/realtime_bxdf_diff.md` records the current difference:
+`docs/realtime_bxdf_diff.md` records that local reference mode currently does
+not call local `PathTracer::HandleHit`. Instead, closest-hit fills
+`RTXPTMaterialHitPayload`, and reference raygen reconstructs BSDF, NEE, MIS,
+nested-dielectric, volume, and path termination behavior from payload fields.
 
-- upstream reference mode still traces through unified
-  `PathTracer::HandleHit`;
-- local reference mode uses a flattened raygen loop;
-- local reference closest-hit fills `RTXPTMaterialHitPayload`;
-- local reference raygen reconstructs BSDF, NEE, MIS, nested dielectric, and
-  path state behavior from payload fields.
+The current reference output is visually correct after recent BxDF fixes. This
+spec treats that output as the baseline. The remaining realtime smooth-glass
+issue is still diagnosed as a realtime Fill stable-plane routing or shader
+codegen problem, so this migration must not obscure that diagnosis.
 
-The current local reference output is visually correct after recent BxDF work.
-The remaining realtime smooth-glass issue is currently diagnosed as a realtime
-Fill stable-plane routing or shader-codegen problem, not as a broad BxDF source
-parity gap. This migration therefore must not expand the realtime regression
-surface while it improves reference source structure.
+## Review Corrections
+
+The reviewed draft understated several facts about the local code. This revision
+makes them design constraints:
+
+1. Current `PathTracer.hlsli` excludes `PathState.hlsli`, `StablePlanes.hlsli`,
+   and `PathTracerStablePlanes.hlsli` when `PATH_TRACER_MODE_REFERENCE`.
+2. Current `HandleHit`, `HandleMiss`, `GenerateScatterRay`,
+   `AccumulatePathRadiance`, and `CommitPixel` live in the non-reference
+   branch.
+3. Current `CommitPixel` has no reference `u_Output` path.
+4. Current `AccumulatePathRadiance` only writes build stable radiance or fill
+   path `L`; reference needs an explicit radiance accumulator.
+5. Current `GenerateScatterRay` includes realtime/stable-plane side effects
+   such as `StablePlanesOnScatter` and specular-hit-distance guide export.
+6. Switching payloads before opening the reference spine would not compile.
 
 ## Goals
 
-1. Make reference closest-hit call local `PathTracer::HandleHit`.
-2. Make reference miss call local `PathTracer::HandleMiss`.
-3. Make reference raygen carry `PathState` instead of local radiance,
-   throughput, nested dielectric, MIS, and BSDF scatter variables.
-4. Reuse the same local `SurfaceData`, `StablePlaneShadingData`, `ActiveBSDF`,
-   and `GenerateScatterRay` path for reference, build, and fill variants.
-5. Preserve the reference output contract: ray tracing writes raw HDR radiance
-   to `u_Output`; accumulation, tone mapping, bloom, and presentation remain
-   outside raygen.
-6. Keep Diligent bridge/resource ownership intact.
-7. Update source-diff documentation after the migration.
+1. Make reference mode compile the `PathState`/`PathPayload` spine.
+2. Add `PATH_TRACER_MODE_REFERENCE` behavior to the spine functions that need a
+   reference output path.
+3. Keep reference radiance accumulation writing raw HDR to `u_Output`.
+4. Preserve reference depth and screen-motion-vector output contracts.
+5. Preserve current reference sampling quality before deleting the flattened
+   loop.
+6. Make reference closest-hit call local `PathTracer::HandleHit`.
+7. Make reference miss call local `PathTracer::HandleMiss`.
+8. Keep Diligent scene, material, lighting, environment, and binding adapters.
+9. Update source-diff documentation after implementation.
 
 ## Non-Goals
 
-- Do not port upstream Donut scene bridge wholesale.
-- Do not make Diligent `Bridge::loadSurface` byte-identical to
+- Do not route reference through stable-plane storage.
+- Do not add a stable-plane resolve pass for reference.
+- Do not port the upstream Donut bridge wholesale.
+- Do not make local `Bridge::loadSurface` byte-identical to upstream
   `PathTracerBridgeDonut.hlsli`.
 - Do not introduce RTXDI/ReSTIR final shading parity.
-- Do not solve the current realtime smooth-glass Fill routing issue as part of
-  this migration.
-- Do not remove Diligent material, light, environment, or skinned-geometry
-  resource adaptation.
-- Do not shrink RT payload size in the first implementation pass unless all
-  variants and shader reflection prove it is safe.
+- Do not solve the current realtime smooth-glass Fill issue as part of this
+  migration.
+- Do not shrink RT payload size in the first pass.
+- Do not intentionally replace reference quality features with realtime
+  approximations.
 
-## Current State
+## Current-State Constraints
 
-Relevant local files:
+Relevant code constraints:
 
-- `DiligentSamples/Samples/RTXPT/assets/shaders/PathTracer/PathTracerSample.rgen`
-  contains the flattened reference loop and a separate stable-plane
-  `PathState` loop.
-- `DiligentSamples/Samples/RTXPT/assets/shaders/PathTracer/PathTracerClosestHit.rchit`
-  uses `RTXPTMaterialHitPayload` for reference and `PathPayload` for realtime
-  variants.
-- `DiligentSamples/Samples/RTXPT/assets/shaders/PathTracer/PathTracerMiss.rmiss`
-  and `PathTracerVisibilityMiss.rmiss` have the same payload split.
-- `DiligentSamples/Samples/RTXPT/assets/shaders/PathTracer/PathTracer.hlsli`
-  already has local `PathState` hit, miss, NEE, scatter, and commit logic.
-- `DiligentSamples/Samples/RTXPT/assets/shaders/PathTracer/PathTracerTypes.hlsli`
-  already defines local `SurfaceData`, `StablePlaneShadingData`, and
-  `ActiveBSDF`.
-- `DiligentSamples/Samples/RTXPT/src/RTXPTRayTracingPass.cpp` sets one
-  conservative `MaxPayloadSize` for all variants.
+- `PathTracer.hlsli` includes `PathState.hlsli` and stable-plane headers only
+  outside reference mode.
+- `PathTracerSample.rgen` has a flattened reference branch and a separate
+  non-reference `PathState` branch.
+- `PathTracerClosestHit.rchit` uses `RTXPTMaterialHitPayload` for reference and
+  `PathPayload` for realtime variants.
+- `PathTracerMiss.rmiss` and visibility miss shaders follow the same payload
+  split.
+- `PathTracerTypes.hlsli::WorkingContext` currently contains `OutputColor`,
+  `PtConsts`, and `StablePlanes`; reference needs output views but must not
+  require stable-plane resources.
+- `RTXPTRayTracingPass.cpp` currently uses a conservative 160-byte
+  `MaxPayloadSize`.
 
-Important constraints:
-
-- The old material-hit payload is 160 bytes.
-- The packed realtime `PathPayload` is smaller, but using the larger
-  `MaxPayloadSize` remains a conservative PSO setting.
-- Existing reference visual correctness is a regression baseline.
-- Existing realtime opaque, diffuse, and metal behavior must not regress.
+The first implementation must work with these constraints instead of assuming
+the current realtime functions are already reference-ready.
 
 ## Target Architecture
 
-All path tracing variants use a common shader-state spine:
+The desired end state is:
 
 ```text
-PathState
-  -> PathPayload::pack
-  -> TraceRay
-  -> closest-hit or miss
-  -> PathPayload::unpack
-  -> PathTracer::HandleHit or PathTracer::HandleMiss
-  -> PathPayload::pack
-  -> raygen loop
+Reference raygen
+  -> PathTracer::EmptyPathInitialize
+  -> PathTracer::SetupPathPrimaryRay
+  -> PathTracer::StartPixel
+  -> nextHit
+       -> TraceRay with PathPayload
+       -> closest-hit or miss
+       -> PathTracer::HandleHit or PathTracer::HandleMiss
+  -> postProcessHit
+  -> ValidateNaNs
   -> PathTracer::CommitPixel
+       -> u_Output + u_Depth + u_ScreenMotionVectors
 ```
 
-Reference mode remains distinct only where it must:
+Reference mode uses the same state-transport spine as build/fill, but not the
+same stable-plane storage exits. Shared functions must be mode-aware:
 
-- no stable-plane storage writes;
-- no Build/Fill stable-plane split behavior;
-- no realtime denoiser guide export except existing reference surface exports;
-- no ReSTIR/RTXDI-only path branches.
+- reference accumulates radiance into path state for final `u_Output`;
+- build accumulates stable radiance and plane data;
+- fill accumulates noisy radiance and commits denoiser radiance.
 
-The local material bridge continues to produce `SurfaceData`. The upstream
-shape is matched at the execution level, while the Diligent bridge remains the
-source of geometry, materials, textures, light metadata, and environment data.
+This is compatible with "no stable-plane writes" only if
+`AccumulatePathRadiance`, `CommitPixel`, `HandleMiss`, `HandleHit`, and
+`GenerateScatterRay` gain explicit reference branches.
 
-## Reference Raygen Design
+## Compile-Universe Refactor
 
-The reference branch of `PathTracerSample.rgen` should:
+The first code checkpoint must make the spine available to reference while the
+old flattened raygen remains active. This keeps the change verifiable and avoids
+a big-bang payload switch.
 
-1. compute the pixel and camera ray;
-2. initialize `PathState` with `PathTracer::EmptyPathInitialize`;
-3. call `PathTracer::SetupPathPrimaryRay`;
-4. create `PathTracer::WorkingContext`;
-5. call `PathTracer::StartPixel`;
-6. loop while the path is active:
-   - call `nextHit(path, tMinMax, workingContext)`;
-   - call `postProcessHit(path, workingContext)`;
-   - call `ValidateNaNs(path, workingContext)` if validation is enabled;
-7. call `PathTracer::CommitPixel(path, workingContext)`.
+Required shape:
 
-The reference raygen should stop owning these local state variables:
+1. Move or widen includes so `PathState`, `PathPayload`, and the shared
+   non-stable-plane helpers compile under reference mode.
+2. Avoid making reference require stable-plane resources. Either split
+   `WorkingContext` fields by mode or provide reference-safe stubs for fields
+   that only build/fill use.
+3. Guard stable-plane-only operations with
+   `PATH_TRACER_MODE != PATH_TRACER_MODE_REFERENCE`.
+4. Keep the old reference raygen branch until the new spine compiles and has a
+   reference output path.
 
-- `throughput`;
-- `pathRadiance`;
-- `fireflyFilterK`;
-- `prevBsdfPdf`;
-- `prevDidEnvNEE`;
-- `prevDidEmissiveNEE`;
-- `diffuseBounces`;
-- `terminateAtNextEndpoint`;
-- reference-local `InteriorList`.
+This checkpoint should compile reference shaders without changing runtime
+reference behavior.
 
-Their behavior should be represented by `PathState` and helpers in
-`PathTracer.hlsli`.
+## Reference Output Contract
 
-## Hit And Miss Shader Design
+Reference mode must keep writing the same downstream targets:
 
-For `PATH_TRACER_MODE_REFERENCE`, `PathTracerClosestHit.rchit` should use
-`PathPayload` as the active payload. The closest-hit body should:
+- `u_Output`: raw HDR radiance for accumulation and tone mapping.
+- `u_Depth`: primary-ray depth semantics compatible with current reference
+  output.
+- `u_ScreenMotionVectors`: current reference writes zero motion vectors; this
+  must remain true unless a later spec changes it.
 
-1. unpack `PathPayload` to `PathState`;
-2. build `SurfaceData` through local `LoadCurrentSurfaceData`;
-3. call local `PathTracer::HandleHit`;
-4. repack the updated state to `PathPayload`.
+`PathTracer::CommitPixel` must have a reference branch. It may write
+`path.GetL().rgb` or another explicit reference radiance field, but the chosen
+storage must be documented and validated.
 
-The reference closest-hit should stop filling `RTXPTMaterialHitPayload` as the
-main execution result.
-
-For reference miss shaders, miss handling should mirror realtime:
-
-1. unpack `PathPayload`;
-2. call local `PathTracer::HandleMiss`;
-3. repack `PathPayload`.
-
-Visibility rays should continue to produce the visibility behavior expected by
-local NEE helpers. If a visibility shader currently relies on the material-hit
-payload shape, the implementation plan must isolate and preserve that contract
-before removing or bypassing `RTXPTMaterialHitPayload`.
+Primary depth cannot be lost when `RTXPTMaterialHitPayload` is removed from the
+main path. If `PathState` does not already carry the necessary first-hit depth
+semantics, implementation must add a reference-safe way to capture and commit
+it without affecting build/fill payload layout.
 
 ## Surface And Material Data
 
-`LoadCurrentSurfaceData` is the local equivalent of upstream
-`Bridge::loadSurface` for Diligent resources. It should remain the single path
-for reference and realtime surface construction.
+`LoadCurrentSurfaceData` remains the Diligent equivalent of upstream
+`Bridge::loadSurface`. It should become the single surface construction path
+for reference and realtime modes.
 
-The helper should continue to populate:
+It must continue to populate:
 
 - world position;
 - shading normal;
@@ -196,130 +195,181 @@ The helper should continue to populate:
 - interior IoR;
 - local NEE light indices when available.
 
-No new payload fields should be added for reference material data. Reference
-material state should come from `SurfaceData`, not from a separate hit payload.
+No new material fields should be routed through `RTXPTMaterialHitPayload`.
+Reference material state should come from `SurfaceData`.
+
+## Reference Quality Invariants
+
+The migration must preserve these current reference behaviors unless a later
+design explicitly chooses to change them:
+
+1. Full-sample NEE support:
+   reference currently uses `min(32u, g_Const.ptConsts.NEEFullSamples)` for
+   per-vertex direct-light sampling and emissive-triangle MIS. The first
+   unified-spine implementation must not silently downgrade this to the
+   realtime single-sample path.
+2. Diffuse-bounce classification:
+   current reference raygen and current realtime `GenerateScatterRay` classify
+   diffuse transmission differently. The first migration must preserve current
+   reference termination and low-discrepancy-sampler switching semantics, or it
+   must record a deliberate estimator change.
+3. Camera jitter:
+   reference currently applies full per-pixel random jitter in addition to the
+   camera jitter field. The unified path must preserve this.
+4. Depth and motion outputs:
+   primary depth and zero motion-vector output must remain compatible with the
+   current reference branch.
+5. Volume and nested-dielectric behavior:
+   false-hit rejection, interior IoR, and volume transmittance must remain
+   behaviorally equivalent to the current reference baseline before any source
+   parity cleanup is attempted.
+
+These are acceptance criteria, not optional risks.
 
 ## NEE, MIS, And Emission
 
-Reference NEE/MIS should move from the flattened raygen ownership to
-`PathTracer::HandleHit` where possible.
+Reference NEE/MIS should move out of the flattened raygen, but not by replacing
+it with realtime approximations.
 
-The target ordering is:
+The target is a reference-capable `HandleHit` path that can:
 
 1. update path travel;
-2. load surface data;
-3. apply volume transmittance through `PathState` throughput;
+2. load `SurfaceData`;
+3. apply volume transmittance;
 4. handle nested dielectrics;
-5. accumulate emissive hit contribution with current local MIS support;
-6. export surface data for reference guide/depth/motion outputs;
-7. generate BSDF scatter through `GenerateScatterRay`;
-8. evaluate direct-light and environment NEE through local Diligent helpers;
+5. accumulate emissive hit contribution with the current reference MIS
+   behavior;
+6. export primary depth and motion information for reference outputs;
+7. generate BSDF scatter;
+8. evaluate direct-light and environment NEE with reference sample-count
+   semantics;
 9. apply Russian roulette and termination through `PathState`;
-10. commit final pixel through `CommitPixel`.
+10. commit final raw HDR radiance through the reference branch of
+    `CommitPixel`.
 
-The implementation may keep Diligent-specific helper functions for emissive
-triangle MIS, environment NEE, and direct-light sampling. The important design
-constraint is that reference no longer owns a duplicate copy of those state
-transitions in raygen.
+Implementation may keep Diligent-specific helper functions for emissive
+triangle MIS, environment NEE, and direct-light sampling. The key requirement is
+that reference behavior is reproduced before the flattened loop is removed.
+
+## Stable-Plane Isolation
+
+Stable-plane-only behavior must remain isolated from reference:
+
+- no `StablePlanesOnScatter` in reference;
+- no `StablePlanesHandleHit` or `StablePlanesHandleMiss` in reference;
+- no specular-hit-distance guide export in reference;
+- no denoiser radiance commit in reference;
+- no new reference bindings for stable-plane UAVs.
+
+Because this migration touches shared functions used by realtime Fill, every
+shared-function edit is part of the realtime regression surface and must be
+verified accordingly.
 
 ## Payload And Pipeline Contract
 
 The first implementation should keep
 `RTXPTRayTracingPass.cpp::MaxPayloadSize = sizeof(float) * 40`.
 
-Rationale:
+The implementation plan must verify:
 
-- it already covers the old 160-byte reference payload;
-- it also covers the smaller packed `PathPayload`;
-- keeping it avoids a simultaneous PSO contract change while changing shader
-  state flow;
-- payload-size reduction can be a later cleanup after reference and realtime
-  validation pass.
+- actual `PathPayload` byte size;
+- that the conservative 160-byte payload size covers every variant;
+- that reference no longer depends on material-hit payload fields for primary
+  depth, motion, or material state before removing that payload from the main
+  path.
 
-If the old `RTXPTMaterialHitPayload` becomes unused after migration, removing it
-or shrinking payload size should be treated as a separate low-risk cleanup.
+Payload-size reduction or deletion of `RTXPTMaterialHitPayload` is a later
+cleanup after all variants pass validation.
 
-## Documentation Updates
+## Implementation Sequencing
 
-After the code migration, update `docs/realtime_bxdf_diff.md`:
+The plan must avoid non-compiling intermediate checkpoints. Use this order:
 
-- replace the statement that local reference does not call
-  `PathTracer::HandleHit`;
-- record that local reference now uses local unified `PathState` and
-  `HandleHit`;
-- keep explicit notes that local bridge/resource adaptation still differs from
-  upstream Donut `Bridge::loadSurface`;
-- keep the current realtime smooth-glass diagnosis separate unless new evidence
-  appears.
+1. Make the `PathState` spine compile under reference mode while old reference
+   raygen remains active.
+2. Add reference branches for radiance accumulation, `CommitPixel`, depth
+   export, motion export, and stable-plane side-effect suppression.
+3. Add reference-quality NEE, MIS, diffuse-bounce, jitter, volume, and
+   nested-dielectric preservation inside the spine.
+4. Compile all variants and verify old reference behavior is still active.
+5. Switch reference closest-hit and miss shaders to `PathPayload` and local
+   hit/miss handlers.
+6. Switch reference raygen to the `PathState` loop.
+7. Remove or retire the flattened reference loop only after the new path
+   compiles and matches the reference baseline.
+8. Update `docs/realtime_bxdf_diff.md` and, if needed,
+   `RTXPT_FORK_MAPPING.md`.
 
-The mapping document may need a short note if the material-hit payload is no
-longer part of the reference main path.
+Each checkpoint must have a build or static verification before moving to the
+next one.
 
 ## Verification Plan
 
 Static checks:
 
-- `rg` confirms the reference path no longer uses `RTXPTMaterialHitPayload` as
-  the main ray payload.
+- `rg` confirms reference spine functions compile in reference mode.
+- `rg` confirms stable-plane-only calls are guarded out of reference mode.
 - `rg` confirms reference closest-hit and miss paths call
-  `PathTracer::HandleHit` and `PathTracer::HandleMiss`.
-- `rg` confirms reference raygen uses `PathState`, `nextHit`,
-  `postProcessHit`, and `CommitPixel`.
+  `PathTracer::HandleHit` and `PathTracer::HandleMiss` only after the spine is
+  reference-capable.
+- `rg` confirms the flattened reference loop is removed or disabled only at the
+  final migration checkpoint.
 
 Build checks:
 
-- build the RTXPT sample target or the closest available CMake target;
+- build the RTXPT sample target or closest available CMake target;
 - confirm reference, build-stable-planes, and fill-stable-planes shader
-  variants compile and RT PSOs initialize.
+  variants compile and RT PSOs initialize;
+- confirm reference does not require stable-plane UAV bindings.
 
-Runtime checks:
+Reference runtime checks:
 
 - load `convergence-test.scene.json`;
-- run reference mode and compare against the current known-good visual baseline;
-- run realtime mode and confirm opaque, diffuse, and metal behavior do not
-  regress;
-- confirm the existing realtime smooth-glass issue is not widened into other
-  material classes;
-- record visual observations and any remaining known differences in docs.
+- compare current baseline and unified-spine reference output at a fixed sample
+  count;
+- use an image metric such as MSE or mean absolute luminance error when a
+  capture pipeline is available;
+- otherwise record fixed-settings screenshot comparisons and manual
+  observations.
+
+Realtime runtime checks:
+
+- confirm opaque, diffuse, and metal realtime behavior do not regress;
+- confirm the current smooth-glass failure does not widen into other material
+  classes;
+- note that touching shared functions may temporarily reduce confidence in the
+  current Fill-path diagnosis, so before/after observations must be recorded.
 
 ## Risks
 
-1. `PathState` reference-mode macro branches may not yet cover every behavior
-   that the flattened raygen currently implements.
-2. Moving MIS and NEE state into `PathState` may change noise patterns or
-   convergence even when the final estimator remains valid.
-3. Visibility rays may still rely on compatibility payload behavior and need a
-   narrow preservation path.
-4. The current realtime smooth-glass issue is likely codegen or Fill routing
-   related; sharing more reference code with realtime must not obscure that
-   diagnosis.
-5. `CommitPixel` and surface export behavior must preserve the reference
-   post-processing pipeline contract.
+1. Opening `PathState` and shared helpers to reference can affect realtime
+   because the same functions are used by Fill.
+2. Adding mode branches may change compiler optimization and shader-codegen
+   behavior around an already suspicious Fill delta-transmission path.
+3. Reference output requires explicit `u_Output`, `u_Depth`, and
+   `u_ScreenMotionVectors` exits that the current spine does not have.
+4. Replacing reference full-sample NEE with realtime single-sample NEE would be
+   a quality regression.
+5. Changing diffuse-bounce classification could change converged images for
+   transmissive diffuse materials.
+6. Removing `RTXPTMaterialHitPayload` before replacing primary-depth and motion
+   semantics would break the reference output contract.
 
 ## Acceptance Criteria
 
 - Reference mode compiles with `PathPayload` and `PathState`.
+- Reference mode does not bind or write stable-plane resources.
+- Reference `AccumulatePathRadiance` and `CommitPixel` branches write raw HDR
+  radiance to the existing reference output path.
+- Reference depth and motion-vector outputs remain compatible with the current
+  baseline.
 - Reference closest-hit calls local `PathTracer::HandleHit`.
 - Reference miss calls local `PathTracer::HandleMiss`.
-- Reference raygen no longer contains the duplicate flattened BxDF loop.
-- Reference mode writes raw HDR radiance to the same downstream output target.
-- `convergence-test.scene.json` reference rendering remains visually acceptable
-  relative to the current baseline.
+- The flattened reference raygen loop is removed only after the unified path
+  passes build and baseline validation.
+- Full-sample NEE, diffuse-bounce classification, camera jitter, volume, and
+  nested-dielectric semantics are preserved or explicitly documented as
+  intentional estimator changes.
 - Realtime opaque, diffuse, and metal behavior do not regress.
-- Documentation clearly states which differences were removed and which
+- Documentation clearly states which source differences were removed and which
   Diligent bridge differences intentionally remain.
-
-## Implementation Sequencing
-
-The implementation plan should split this work into small checkpoints:
-
-1. Switch reference shader payload selection to `PathPayload`.
-2. Make reference closest-hit and miss call local hit/miss handlers.
-3. Replace flattened reference raygen with the `PathState` loop.
-4. Restore or adjust reference `CommitPixel` and surface export behavior.
-5. Resolve compile errors and macro gaps.
-6. Run static/build/runtime verification.
-7. Update documentation.
-
-Each checkpoint should be reversible and have a targeted verification command
-or observation before moving to the next one.
