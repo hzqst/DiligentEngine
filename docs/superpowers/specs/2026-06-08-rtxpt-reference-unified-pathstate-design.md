@@ -262,14 +262,30 @@ design explicitly chooses to change them:
 3. Camera jitter:
    reference currently applies full per-pixel random jitter in addition to the
    camera jitter field. The unified path must preserve this.
-4. Depth and motion outputs:
+4. Russian roulette:
+   reference currently applies unbiased Russian roulette after BSDF scatter when
+   the current bounce is at or past `minBounceCount`, using survival probability
+   `clamp(max(throughput), 0.05, 1.0)` and dividing throughput by that survival
+   probability for surviving paths. The unified path must preserve this
+   behavior, or explicitly document an intentional performance/estimator change.
+5. Depth and motion outputs:
    primary depth and zero motion-vector output must remain compatible with the
-   current reference branch.
-5. Volume and nested-dielectric behavior:
+   current reference branch. Primary depth capture must be stateful and
+   one-shot. The current flattened branch captures the first primary
+   `TraceRay` hit before nested-dielectric rejection can continue the path; the
+   unified path must not depend on a fixed `vertexIndex == 1` test that can be
+   skipped by nested-dielectric false-hit rejection. Capturing only the first
+   accepted surface would be an intentional output semantics change and must be
+   documented separately.
+6. Termination safety:
+   reference must preserve the old bounded path loop semantics. The unified
+   `while (path.isActive())` shape needs an explicit reference safety ceiling so
+   a missed termination flag cannot create an unbounded GPU loop.
+7. Volume and nested-dielectric behavior:
    false-hit rejection, interior IoR, and volume transmittance must remain
    behaviorally equivalent to the current reference baseline before any source
    parity cleanup is attempted.
-6. Visibility rays:
+8. Visibility rays:
    reference direct-light and environment NEE must continue to trace visibility
    rays correctly after reference uses `PathPayload`. The visibility miss
    shader and `TraceVisibilityRay` payload contract must be checked explicitly.
@@ -293,7 +309,8 @@ The target is a reference-capable `HandleHit` path that can:
 7. generate BSDF scatter;
 8. evaluate direct-light and environment NEE with reference sample-count
    semantics;
-9. apply Russian roulette and termination through `PathState`;
+9. apply Russian roulette, `minBounceCount`, and termination through
+   `PathState`;
 10. commit final raw HDR radiance through the reference branch of
     `CommitPixel`.
 
@@ -326,7 +343,7 @@ the same high-risk functions. That divergence must be recorded in
 The first implementation should keep
 `RTXPTRayTracingPass.cpp::MaxPayloadSize = sizeof(float) * 40`.
 
-The implementation plan must verify:
+The implementation must preserve:
 
 - that reference no longer depends on material-hit payload fields for primary
   depth, motion, or material state before removing that payload from the main
@@ -335,7 +352,8 @@ The implementation plan must verify:
   packed `InteriorList` slots are carried through `PathPayload`.
 
 Payload-size reduction or deletion of `RTXPTMaterialHitPayload` is a later
-cleanup after all variants pass validation.
+cleanup after the execution owner completes any external review or validation
+gate they choose to run.
 
 ## Implementation Sequencing
 
@@ -346,63 +364,47 @@ The plan must avoid non-compiling intermediate checkpoints. Use this order:
 2. Add reference branches for radiance accumulation, `CommitPixel`, depth
    export, motion export, and stable-plane side-effect suppression.
 3. Add reference-quality NEE, MIS, diffuse-bounce, jitter, volume, and
-   nested-dielectric preservation inside the spine.
-4. Compile all variants and verify old reference behavior is still active.
-   Capture or record the baseline at this point, while reference pixels still
-   run the old flattened loop and old material-hit payload. This freezes the
-   comparison target before reference output rides through the non-BUILD
-   `PathPayload` packing path.
+   nested-dielectric preservation inside the spine. This includes reference
+   Russian roulette and `minBounceCount`; color-only image comparison is not
+   sufficient to catch that performance-sensitive behavior.
+4. Keep the old reference raygen active until the shared spine source changes
+   are complete. Any baseline capture or behavior comparison is an external
+   human/CI gate, not an implementation-plan step.
 5. Switch reference closest-hit and miss shaders to `PathPayload` and local
    hit/miss handlers.
 6. Switch reference raygen to the `PathState` loop.
-7. Remove or retire the flattened reference loop only after the new path
-   compiles and matches the reference baseline.
+7. Remove or retire the flattened reference loop only after the source-level
+   migration is complete and an external review gate accepts the risk.
 8. Update `docs/realtime_bxdf_diff.md` and, if needed,
    `RTXPT_FORK_MAPPING.md`.
 
-Each checkpoint must have a build or static verification before moving to the
-next one.
+Build, static search, runtime smoke, screenshot capture, and image-diff
+comparison are external gates for the execution owner. They are intentionally
+not required as executable steps inside the implementation plan.
 
-## Verification Plan
+## External Review Gate
 
-Static checks:
+These checks are recommended outside the implementation plan and may be done by
+a human reviewer, local build, CI, or a separate validation run:
 
-- `rg` confirms reference spine functions compile in reference mode.
-- `rg` confirms stable-plane-only calls are guarded out of reference mode.
-- `rg` confirms reference closest-hit and miss paths call
+- reference spine functions are available in reference mode;
+- stable-plane-only calls are guarded out of reference mode;
+- reference closest-hit and miss paths call
   `PathTracer::HandleHit` and `PathTracer::HandleMiss` only after the spine is
   reference-capable.
-- `rg` confirms the flattened reference loop is removed or disabled only at the
-  final migration checkpoint.
-- `rg` confirms `TraceVisibilityRay` and `PathTracerVisibilityMiss.rmiss` use a
+- the flattened reference loop is removed or disabled only at the final
+  migration checkpoint;
+- reference Russian roulette uses `minBounceCount` in the shared spine before
+  the flattened loop is removed;
+- reference primary depth uses a one-shot captured state rather
+  than a fixed `vertexIndex == 1` condition.
+- the unified reference raygen has an explicit loop safety ceiling;
+- `TraceVisibilityRay` and `PathTracerVisibilityMiss.rmiss` use a
   payload contract compatible with reference after the spine switch.
-- `rg` or shader compile logs confirm `RTXPT_NESTED_DIELECTRICS_QUALITY > 0`
-  for the reference variant.
-
-Build checks:
-
-- build the RTXPT sample target or closest available CMake target;
-- confirm reference, build-stable-planes, and fill-stable-planes shader
-  variants compile and RT PSOs initialize;
-- confirm reference does not require stable-plane UAV bindings.
-
-Reference runtime checks:
-
-- load `convergence-test.scene.json`;
-- compare current baseline and unified-spine reference output at a fixed sample
-  count;
-- use an image metric such as MSE or mean absolute luminance error when a
-  capture pipeline is available;
-- otherwise record fixed-settings screenshot comparisons and manual
-  observations.
-
-Realtime runtime checks:
-
-- confirm opaque, diffuse, and metal realtime behavior do not regress;
-- confirm the current smooth-glass failure does not widen into other material
-  classes;
-- note that touching shared functions may temporarily reduce confidence in the
-  current Fill-path diagnosis, so before/after observations must be recorded.
+- shader compile logs, if collected externally, confirm
+  `RTXPT_NESTED_DIELECTRICS_QUALITY > 0` for the reference variant;
+- runtime validation, if collected externally, checks reference scenes and the
+  realtime opaque/diffuse/metal regression surface.
 
 ## Risks
 
@@ -413,7 +415,8 @@ Realtime runtime checks:
    Reference will also use the non-BUILD `PathPayload` packing layout
    (`pack45`, `stableBranchID`, split flags, stable-plane index, and
    vertex-index wire word), so a reference-specific macro combination could
-   perturb the baseline unless the old flattened loop is captured first.
+   perturb visual behavior; any capture-based comparison is intentionally
+   outside the implementation plan.
 3. Reference output requires explicit `u_Output`, `u_Depth`, and
    `u_ScreenMotionVectors` exits that the current spine does not have.
 4. Replacing reference full-sample NEE with realtime single-sample NEE would be
@@ -437,11 +440,15 @@ Realtime runtime checks:
   baseline.
 - Reference closest-hit calls local `PathTracer::HandleHit`.
 - Reference miss calls local `PathTracer::HandleMiss`.
-- The flattened reference raygen loop is removed only after the unified path
-  passes build and baseline validation.
+- The flattened reference raygen loop is removed only after the source-level
+  migration is complete and an external review gate accepts the risk.
 - Full-sample NEE, diffuse-bounce classification, camera jitter, volume, and
   nested-dielectric semantics are preserved or explicitly documented as
   intentional estimator changes.
+- Reference Russian roulette and `minBounceCount` behavior are preserved, with
+  throughput correction for surviving paths.
+- The unified reference loop has a hard safety ceiling in addition to normal
+  path termination.
 - Reference visibility rays still produce correct occlusion behavior after the
   payload switch.
 - Realtime opaque, diffuse, and metal behavior do not regress.
