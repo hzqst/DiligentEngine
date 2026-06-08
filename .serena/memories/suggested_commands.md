@@ -63,4 +63,15 @@ serena project index
 serena project health-check
 ```
 
+RTXPT closest-hit shader smoke matching Debug runtime DXC:
+
+Use this when debugging RTXPT ray tracing shaders. Diligent Debug builds compile shaders through the repo DXC 1.10.2605.24 path with `-Zi -Od -Qembed_debug -Zpr`; using a newer VulkanSDK `dxc.exe` or omitting these flags can miss `br i1 undef` validation failures that happen at runtime.
+
+```powershell
+cd DiligentSamples\Samples\RTXPT\assets
+& "D:\DiligentEngine-hzqst\build\tools\dxc\v1.10.2605.24-preview\bin\x64\dxc.exe" -T lib_6_5 -E main -Zi -Od -Qembed_debug -Zpr -D PATH_TRACER_MODE=<0|1|2> -D ENABLE_MATERIAL_TEXTURES=1 -D MATERIAL_TEXTURE_COUNT=1024 -D RTXPT_ENABLE_LOW_DISCREPANCY_SAMPLER_FOR_BSDF=1 -D DXCOMPILER=1 -D "VK_IMAGE_FORMAT(x)=" -I shaders -I shaders\PathTracer shaders\PathTracer\PathTracerClosestHit.rchit -Fo NUL
+```
+
+Run all three `PATH_TRACER_MODE` values when checking `PathTracerClosestHit.rchit`: `0` Reference, `1` BuildStablePlanes, `2` FillStablePlanes.
+
 Do not run test or runtime smoke commands unless the user explicitly asks for them.
