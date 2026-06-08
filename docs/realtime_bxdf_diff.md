@@ -49,8 +49,8 @@ Diligent scene adapters.
   solid-angle PDF carried in `SurfaceData::emissiveLightPdf`.
 - Reference branches inside the shared spine preserve the current Diligent
   reference estimator: full-sample NEE, emissive/environment MIS, firefly
-  filtering, camera jitter, diffuse-bounce classification, `minBounceCount`
-  Russian roulette, volume absorption, and nested-dielectric rejection.
+  filtering, camera jitter, `minBounceCount` Russian roulette, volume
+  absorption, and nested-dielectric rejection.
 - Realtime BUILD/FILL stable-plane side effects remain guarded away from
   reference mode.
 
@@ -185,23 +185,22 @@ transmission scatter math itself.
    Off), matching upstream's binding-time semantics. `PathTracerSample.rgen`
    consumes the zero-argument helper for the reference loop ceiling.
 
+3. **Reference diffuse-bounce classification was intentionally narrower.** Synced
+   on 2026-06-08: reference `GenerateScatterRay` now uses the same classification
+   as upstream/realtime: diffuse reflection, diffuse transmission, or roughness
+   above `kSpecularRoughnessThreshold` count as diffuse-like. Diffuse
+   transmission keeps the upstream/realtime every-other-vertex increment guard to
+   avoid overdarkening diffuse volumes.
+
 ### Remaining confirmed divergences from upstream (with effect assessment)
 
-1. **Reference diffuse-bounce classification is intentionally narrower.** Local
-   reference (`PathTracer.hlsli:501`) counts a bounce as diffuse only when it is a
-   diffuse-reflection lobe *or* (rough specular `roughness>0.25` **and not**
-   transmission); upstream/realtime also count `DiffuseTransmission` and rough
-   transmission. This is the previously-recorded intentional reference divergence;
-   it changes how fast a transmissive path exhausts `diffuseBounceCount`, which can
-   shorten transmissive paths but does not zero them.
-
-2. **`GenerateScatterRay` omits a couple of upstream side effects.** The local
+1. **`GenerateScatterRay` omits a couple of upstream side effects.** The local
    port does not expand `path.rayCone` spread angle on non-delta scatter and does
    not set `PathFlags::enableThreadReorder` (cf. upstream `PathTracer.hlsli:292/341`).
    These affect texture LOD / firefly-K growth / thread reordering, not whether a
    transmission lobe is sampled.
 
-3. **Reference uses an inlined single-overload `GenerateScatterRay`** that consumes
+2. **Reference uses an inlined single-overload `GenerateScatterRay`** that consumes
    pre-generated samples and calls `SampleBSDF` directly, whereas upstream splits
    into a sampler overload + a `GenerateScatterRay(bs, …)` consumer. Same net math.
    `MakeBSDFSample.deltaLobeIndex` carries the documented FILL fix
