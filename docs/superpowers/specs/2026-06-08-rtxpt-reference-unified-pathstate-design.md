@@ -52,6 +52,27 @@ makes them design constraints:
    such as `StablePlanesOnScatter` and specular-hit-distance guide export.
 6. Switching payloads before opening the reference spine would not compile.
 
+## Verified Facts
+
+These items have already been checked against the local code and should not be
+left as open assumptions in the implementation plan:
+
+1. `PathPayload` is 80 bytes:
+   `RTXPT_PATH_PAYLOAD_UINT4_COUNT == 5`, and the payload stores
+   `uint4 packed[5]`.
+2. `RTXPTRayTracingPass.cpp::MaxPayloadSize = sizeof(float) * 40` is a
+   conservative 160-byte upper bound. It covers both the 80-byte `PathPayload`
+   and the old 160-byte `RTXPTMaterialHitPayload`.
+3. `PathState::SetL` and `PathState::GetL` are available whenever
+   `PATH_TRACER_MODE != PATH_TRACER_MODE_BUILD_STABLE_PLANES`; reference mode
+   can therefore use `path.GetL().rgb` as its final radiance source.
+4. `PathTracerTypes.hlsli::WorkingContext` currently contains exactly the
+   common output color field, path-tracer constants, and stable-plane context.
+   Reference needs additional output access for depth and screen motion.
+5. `RTXPT_NESTED_DIELECTRICS_QUALITY` defaults to `1`, and both
+   `PathState::interiorList` and the packed payload slots depend on it being
+   greater than zero.
+
 ## Goals
 
 1. Make reference mode compile the `PathState`/`PathPayload` spine.
@@ -144,13 +165,38 @@ Required shape:
 2. Avoid making reference require stable-plane resources. Either split
    `WorkingContext` fields by mode or provide reference-safe stubs for fields
    that only build/fill use.
-3. Guard stable-plane-only operations with
+3. Add explicit reference output access for `u_Depth` and
+   `u_ScreenMotionVectors`; one `RWTexture2D<float4> OutputColor` is not enough
+   for the reference output contract.
+4. Guard stable-plane-only operations with
    `PATH_TRACER_MODE != PATH_TRACER_MODE_REFERENCE`.
-4. Keep the old reference raygen branch until the new spine compiles and has a
+5. Keep the old reference raygen branch until the new spine compiles and has a
    reference output path.
 
 This checkpoint should compile reference shaders without changing runtime
 reference behavior.
+
+### Context Shape Decision
+
+Use one mode-aware `PathTracer::WorkingContext` rather than introducing a
+separate `ReferenceWorkingContext`.
+
+Rationale:
+
+- the upstream-style spine passes one context through hit, miss, scatter, NEE,
+  and commit helpers;
+- a separate reference context would require overloads or templates across the
+  same fragile function set;
+- a single struct keeps the call graph closer to upstream and makes the final
+  reference raygen shape simpler.
+
+Cost:
+
+- `WorkingContext` becomes a three-mode contract, not a stable-plane-only
+  contract;
+- mode-specific fields must be guarded carefully so reference does not bind
+  stable-plane UAVs and build/fill do not depend on reference-only outputs;
+- edits to this shared struct are part of the realtime regression surface.
 
 ## Reference Output Contract
 
@@ -223,6 +269,10 @@ design explicitly chooses to change them:
    false-hit rejection, interior IoR, and volume transmittance must remain
    behaviorally equivalent to the current reference baseline before any source
    parity cleanup is attempted.
+6. Visibility rays:
+   reference direct-light and environment NEE must continue to trace visibility
+   rays correctly after reference uses `PathPayload`. The visibility miss
+   shader and `TraceVisibilityRay` payload contract must be checked explicitly.
 
 These are acceptance criteria, not optional risks.
 
@@ -265,6 +315,12 @@ Because this migration touches shared functions used by realtime Fill, every
 shared-function edit is part of the realtime regression surface and must be
 verified accordingly.
 
+The reference branch will not be a set of thin guards. Preserving full-sample
+NEE, current diffuse-bounce classification, reference jitter, and reference
+output exports requires substantive `PATH_TRACER_MODE_REFERENCE` behavior inside
+the same high-risk functions. That divergence must be recorded in
+`RTXPT_FORK_MAPPING.md` if it remains after implementation.
+
 ## Payload And Pipeline Contract
 
 The first implementation should keep
@@ -272,11 +328,11 @@ The first implementation should keep
 
 The implementation plan must verify:
 
-- actual `PathPayload` byte size;
-- that the conservative 160-byte payload size covers every variant;
 - that reference no longer depends on material-hit payload fields for primary
   depth, motion, or material state before removing that payload from the main
   path.
+- that reference is compiled with `RTXPT_NESTED_DIELECTRICS_QUALITY > 0` so the
+  packed `InteriorList` slots are carried through `PathPayload`.
 
 Payload-size reduction or deletion of `RTXPTMaterialHitPayload` is a later
 cleanup after all variants pass validation.
@@ -292,6 +348,10 @@ The plan must avoid non-compiling intermediate checkpoints. Use this order:
 3. Add reference-quality NEE, MIS, diffuse-bounce, jitter, volume, and
    nested-dielectric preservation inside the spine.
 4. Compile all variants and verify old reference behavior is still active.
+   Capture or record the baseline at this point, while reference pixels still
+   run the old flattened loop and old material-hit payload. This freezes the
+   comparison target before reference output rides through the non-BUILD
+   `PathPayload` packing path.
 5. Switch reference closest-hit and miss shaders to `PathPayload` and local
    hit/miss handlers.
 6. Switch reference raygen to the `PathState` loop.
@@ -314,6 +374,10 @@ Static checks:
   reference-capable.
 - `rg` confirms the flattened reference loop is removed or disabled only at the
   final migration checkpoint.
+- `rg` confirms `TraceVisibilityRay` and `PathTracerVisibilityMiss.rmiss` use a
+  payload contract compatible with reference after the spine switch.
+- `rg` or shader compile logs confirm `RTXPT_NESTED_DIELECTRICS_QUALITY > 0`
+  for the reference variant.
 
 Build checks:
 
@@ -346,6 +410,10 @@ Realtime runtime checks:
    because the same functions are used by Fill.
 2. Adding mode branches may change compiler optimization and shader-codegen
    behavior around an already suspicious Fill delta-transmission path.
+   Reference will also use the non-BUILD `PathPayload` packing layout
+   (`pack45`, `stableBranchID`, split flags, stable-plane index, and
+   vertex-index wire word), so a reference-specific macro combination could
+   perturb the baseline unless the old flattened loop is captured first.
 3. Reference output requires explicit `u_Output`, `u_Depth`, and
    `u_ScreenMotionVectors` exits that the current spine does not have.
 4. Replacing reference full-sample NEE with realtime single-sample NEE would be
@@ -354,6 +422,10 @@ Realtime runtime checks:
    transmissive diffuse materials.
 6. Removing `RTXPTMaterialHitPayload` before replacing primary-depth and motion
    semantics would break the reference output contract.
+7. Preserving reference quality creates a three-way BUILD/FILL/REFERENCE split
+   inside core functions such as `HandleHit`, `GenerateScatterRay`, and
+   `AccumulatePathRadiance`; that is a standing maintenance and regression
+   cost.
 
 ## Acceptance Criteria
 
@@ -370,6 +442,8 @@ Realtime runtime checks:
 - Full-sample NEE, diffuse-bounce classification, camera jitter, volume, and
   nested-dielectric semantics are preserved or explicitly documented as
   intentional estimator changes.
+- Reference visibility rays still produce correct occlusion behavior after the
+  payload switch.
 - Realtime opaque, diffuse, and metal behavior do not regress.
 - Documentation clearly states which source differences were removed and which
   Diligent bridge differences intentionally remain.
