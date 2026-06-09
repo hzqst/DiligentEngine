@@ -1,17 +1,34 @@
 # Realtime BxDF Symptoms and Conclusions
 
-Last updated: 2026-06-08
+Last updated: 2026-06-09
 
 This note is intentionally compressed. It keeps only the observed symptoms, confirmed
 conclusions, and current next action.
+
+## RESOLVED (2026-06-09) — Root Cause: DXC `-Od` Miscompiles `HandleHit`
+
+Root cause confirmed. The DXC flag `-Od` (disable optimizations) makes DXC emit
+incorrect DXIL for `PathTracer::HandleHit`, causing it to malfunction. The defect
+is consistent with DXC's optimization-disabled DXIL mishandling nested `inout`
+parameters — `HandleHit` and its callees thread deeply nested `inout` state, which
+is exactly the construct that triggers the bad codegen.
+
+Fix: compile with optimizations enabled (drop `-Od`). With optimization on, DXC
+emits correct DXIL, every symptom below is gone, and reference mode now renders
+identically to upstream RTXPT.
+
+This confirms the "DXC / shader-codegen-class failure" hypothesis recorded
+throughout this note. All source-level audits stand: the ported shader logic was
+faithful; the failure was purely `-Od` DXIL codegen. The Serena `suggested_commands`
+smoke command has been updated to drop `-Od`.
 
 ## Scope
 
 - Scene: `convergence-test.scene.json`.
 - Mode: RTXPT realtime / stable planes.
 - Reference mode: visually correct after the BxDF fixes.
-- Realtime mode: opaque and metal paths are currently correct; smooth-glass
-  transmission is still broken.
+- Realtime mode: correct after dropping `-Od` (see Resolved section). Previously,
+  under `-Od`, smooth-glass transmission rendered black.
 
 ## Symptoms
 
@@ -104,24 +121,16 @@ conclusions, and current next action.
 
 ## Current Conclusion
 
-Source-level diffing is exhausted. Opaque, diffuse, and metal realtime rendering are
-correct after Gate 1 / Gate 2 / Gate 3, but smooth-glass realtime transmission remains
-black because the Fill path does not route through the glass onto the secondary stable
-plane that Build lays down.
-
-The strongest current conclusion is a DXC / shader-codegen-class failure in the
-realtime Fill delta-transmission path, not a known source-logic mismatch with upstream
-RTXPT.
+RESOLVED — see the Resolved (2026-06-09) section at the top. The DXC /
+shader-codegen-class hypothesis was correct: the realtime symptoms (opaque/diffuse
+black-out and smooth-glass transmission black) were caused by `-Od` DXIL
+miscompilation of `PathTracer::HandleHit`, not by a source-logic mismatch with
+upstream RTXPT. Source-level diffing was exhausted and found the port faithful,
+which is consistent with the codegen root cause. Enabling optimizations fixes all
+of it.
 
 ## Next Action
 
-Use GPU capture, preferably RenderDoc or PIX, on a smooth-glass pixel. Read the
-stable-plane header and the Fill path state to answer:
-
-- Does the Fill path physically refract through the glass?
-- What `stableBranchID` does the Fill path carry?
-- How does that value compare with the stored secondary-plane branchID?
-- Which packed or conditional Fill state field diverges at runtime?
-
-If the capture confirms codegen corruption, apply a Gate-1-style mitigation to the
-specific implicated field, or extract a minimal DXC repro and report it upstream.
+None required for the rendering bug — resolved by dropping `-Od`. Optional
+follow-up: extract a minimal DXC `-Od` nested-`inout` repro and report it upstream
+so the optimization-disabled debug configuration can be used safely again.
