@@ -68,7 +68,7 @@ Current Diligent anchors:
   `FillMaterialPTDataFromGLTF`, `AppendTextureViews`, `RemapMaterialTextureIndices`,
   and `RTXPTMaterials::Upload(IRenderDevice*, const RTXPTSceneGraphData&)` build
   material GPU data and the bindless texture SRV table.
-- `DiligentSamples/Samples/RTXPT/assets/shaders/PathTracer/Rendering/Materials/MaterialBridge.hlsli`:
+- `DiligentSamples/Samples/RTXPT/shaders/PathTracer/Rendering/Materials/MaterialBridge.hlsli`:
   `t_BindlessTextures[MATERIAL_TEXTURE_COUNT]` is sampled through
   `MaterialPTData` texture indices when `ENABLE_MATERIAL_TEXTURES` is defined.
 - `DiligentSamples/Samples/RTXPT/src/RTXPTEnvMapBaker.cpp`:
@@ -200,15 +200,58 @@ Required behavior:
   says `true`; data textures such as ORM, normal, and transmission should remain
   linear when the JSON says `false`.
 
+### External Texture Override Of glTF Textures (Confirmed Behavior)
+
+This is not limited to `convergence-test.scene.json`. The shipped scenes
+**Bistro** (`bistro-programmer-art.scene.json`) and **ABeautifulGame** author
+external texture-path objects (`BaseTexture`, `NormalTexture`,
+`OcclusionRoughnessMetallicTexture`, etc.) in their `.material.json` files, and
+their glTF models also carry embedded glTF textures. Today the external objects
+are ignored, so these scenes render with glTF textures. After this change, a
+material with both a glTF texture and an authored external texture for the same
+slot switches to the external texture.
+
+Decision: the override is the desired behavior. It matches RTXPT-fork, where the
+`.material.json` is the authoritative material source. The external DDS paths
+referenced by Bistro resolve under the Diligent assets root (verified:
+`Models/Bistro/objects/.../*.dds` exist), so the override is expected to be
+visually equivalent for those scenes while routing them through the external
+texture path.
+
+Because shipped scenes now depend on external loads, the override must be
+fail-safe so it cannot regress a scene that previously rendered through glTF
+textures:
+
+- When an external texture object is authored for a slot, loads successfully,
+  and the enable switch is on: the external binding replaces the glTF binding
+  for that slot.
+- When an external texture object is authored but its load fails, and the slot
+  also has a valid glTF texture binding: keep the existing glTF binding for that
+  slot instead of dropping to factor-only. Dropping to factor-only here would
+  make a previously textured Bistro/ABeautifulGame material lose its texture,
+  which is a regression. (This refines D7's failure handling, which otherwise
+  clears the flag.)
+- When an external texture object is authored, its load fails, and there is no
+  glTF texture for that slot (the `convergence-test` case): clear the flag and
+  use factor-only fallback, as in D7.
+
 ## Implementation Scope
 
 In-scope implementation files:
 
 - `DiligentSamples/Samples/RTXPT/src/RTXPTSceneGraph.{hpp,cpp}`
+- `DiligentSamples/Samples/RTXPT/src/RTXPTScene.cpp`. Hosts the
+  `.material.json` parse/load loop in `RTXPTScene::LoadScene`, which the
+  `RTXPT_ENABLE_MATERIAL_EXTENSION` "loaded" gate wraps. See D0.
 - `DiligentSamples/Samples/RTXPT/src/RTXPTMaterials.{hpp,cpp}`
+- `DiligentSamples/Samples/RTXPT/src/RTXPTAccelerationStructures.cpp` and
+  `DiligentSamples/Samples/RTXPT/src/RTXPTLights.cpp`. These classify materials
+  (any-hit / alpha-test / alpha-blend / emissive-area-light) using glTF-only
+  texture queries and must account for external material-JSON texture state. See
+  D8.
 - The single call site in `DiligentSamples/Samples/RTXPT/src/RTXPTSample.cpp`
   if `RTXPTMaterials::Upload` needs the assets root as an explicit argument.
-- `DiligentSamples/Samples/RTXPT/assets/shaders/PathTracer/Rendering/Materials/MaterialBridge.hlsli`
+- `DiligentSamples/Samples/RTXPT/shaders/PathTracer/Rendering/Materials/MaterialBridge.hlsli`
   only if SRV dimension compatibility requires a shader resource declaration
   adjustment.
 - `DiligentSamples/Samples/RTXPT/CMakeLists.txt` only if the existing RTXPT
@@ -226,6 +269,39 @@ Out-of-scope behavior:
   unless a separate material-fidelity spec requires it.
 
 ## Detailed Design
+
+### D0 - Master Switch: `RTXPT_ENABLE_MATERIAL_EXTENSION`
+
+Add a compile-time master switch that controls whether the entire RTXPT
+`.material.json` material extension is loaded and used. Default: enabled (`1`).
+
+Define it in `RTXPTSceneGraph.hpp`, which is visible to both `RTXPTScene.cpp`
+(via `RTXPTScene.hpp`) and `RTXPTMaterials.cpp`:
+
+```cpp
+#ifndef RTXPT_ENABLE_MATERIAL_EXTENSION
+#    define RTXPT_ENABLE_MATERIAL_EXTENSION 1
+#endif
+```
+
+It can be overridden from CMake, e.g.
+`target_compile_definitions(RTXPT PRIVATE RTXPT_ENABLE_MATERIAL_EXTENSION=0)`.
+
+This gates the whole extension, not just the external textures added by this
+spec. Semantics when set to `0`:
+
+- The `.material.json` discovery/parse loop in `RTXPTScene::LoadScene` is
+  compiled out, so no material JSON files are read (no extension file I/O). Each
+  material's extension entry remains at its default state with `Loaded = false`.
+- `RTXPTGetMaterialExtension` returns `nullptr`, so every consumer
+  (`RTXPTMaterials::Upload`, the classification helpers) falls back to pure glTF
+  material behavior — covering scalar overrides, enable switches, and the
+  external material textures from this spec.
+
+The gate is applied at two points so the intent is explicit: the parse/load loop
+("loaded") and an early-out in `RTXPTGetMaterialExtension` ("used"). Because a
+default extension already reports `Loaded = false`, the existing consumers
+require no further changes for the switch to take effect.
 
 ### D1 - Add Material JSON Texture Descriptors
 
@@ -317,37 +393,41 @@ CreateTextureFromFile(ResolvedPath.c_str(), LoadInfo, pDevice, &Texture);
 Create an SRV for the loaded texture and append it to the same bindless material
 texture table as glTF texture SRVs.
 
-The implementation must not mix incompatible resource types in one HLSL bindless
-array. `MaterialBridge.hlsli` currently declares:
+Resource dimension is preverified, so the implementation keeps the current
+`Texture2DArray` shader contract. `MaterialBridge.hlsli` declares:
 
 ```hlsl
 Texture2DArray t_BindlessTextures[MATERIAL_TEXTURE_COUNT];
 ```
 
-and `CreateMaterialTextureView` currently requests
-`RESOURCE_DIM_TEX_2D_ARRAY`. The implementation must therefore choose one
-consistent path:
+and `CreateMaterialTextureView` requests `RESOURCE_DIM_TEX_2D_ARRAY`. External
+DDS/PNG textures load through `CreateTextureFromFile`, which creates
+`RESOURCE_DIM_TEX_2D` resources (`TextureLoaderImpl.cpp`). Diligent's texture
+view validation explicitly allows a `RESOURCE_DIM_TEX_2D_ARRAY` view over a
+`RESOURCE_DIM_TEX_2D` resource (`TextureBase.cpp`, the `RESOURCE_DIM_TEX_2D`
+case permits a `TEX_2D` or `TEX_2D_ARRAY` view). A single-slice 2D-array view of
+the loaded 2D texture is therefore valid on D3D12 and Vulkan, matches what the
+glTF path already produces, and preserves the `Texture2DArray` shader contract.
 
-- Preferred path: preserve the current `Texture2DArray` shader contract by
-  creating external SRVs that are valid as single-slice `RESOURCE_DIM_TEX_2D_ARRAY`
-  views, and verify `CreateMaterialTextureView` returns non-null for loaded
-  external files.
-- Fallback path: if Diligent `CreateTextureFromFile` cannot expose external
-  textures as `Texture2DArray`, change the entire material bindless table to a
-  `Texture2D` contract only after confirming glTF textures can also be exposed
-  through compatible 2D SRVs. In that case, `baseColorTextureSlice` and related
-  slice fields remain zero and are ignored by the shader bridge.
-
-Do not bind glTF textures as one resource type and external textures as another
-inside the same `t_BindlessTextures` array.
+Required path: reuse the existing `CreateMaterialTextureView` helper for external
+textures exactly as for glTF textures, and verify it returns non-null for loaded
+external files. There is no need to change the shader's `Texture2DArray`
+declaration. Do not migrate the bindless table to a `Texture2D` contract and do
+not bind glTF and external textures as different resource dimensions inside the
+same `t_BindlessTextures` array.
 
 ### D5 - Deduplicate External Texture Bindings
 
-Add an internal map in `RTXPTMaterials::Upload` or `RTXPTMaterials`:
+Add a deduplication map as a **local variable inside `RTXPTMaterials::Upload`**,
+keyed by:
 
 ```text
 normalized resolved path + sRGB + NormalMap -> bindless texture index
 ```
+
+Keeping the map local to `Upload` (not a member) means it is naturally fresh on
+every scene rebuild and needs no `Reset()` handling, which avoids reusing stale
+bindless indices across scene reloads.
 
 Deduplication prevents repeated material JSON files from loading the same DDS
 multiple times. If the same normalized path is requested with conflicting
@@ -355,9 +435,15 @@ multiple times. If the same normalized path is requested with conflicting
 this mirrors RTXPT-fork's warning/assert behavior without crashing release
 builds.
 
-The lifetime model should match current `m_TextureViews` ownership. If an SRV
-does not keep the underlying `ITexture` alive on every backend, add an internal
-`std::vector<RefCntAutoPtr<ITexture>>` for externally loaded textures.
+Lifetime is already covered by the existing `m_TextureViews` ownership and needs
+no extra retain vector. `CreateMaterialTextureView` creates a non-default view
+via `ITexture::CreateView`, and Diligent's `TextureViewBase` keeps a **strong
+reference** to its texture for non-default views (`m_spTexture`,
+`RefCntAutoPtr<ITexture>`). Storing the external SRV in the existing member
+`m_TextureViews` therefore keeps the underlying `ITexture` alive on every
+backend, exactly as it already does for glTF texture views. Do **not** add a
+separate `std::vector<RefCntAutoPtr<ITexture>>`; reuse `m_TextureViews` and let
+`Reset()` continue to release it.
 
 ### D6 - Preserve glTF Texture Remapping
 
@@ -374,6 +460,14 @@ Keep the existing upload order:
 This preserves the built-in glTF texture path for scenes that do not author
 external RTXPT texture objects.
 
+`m_Stats.TextureCount` is currently assigned immediately after the glTF append
+loop, before the per-material loop that step 5 uses to append external textures.
+Move that assignment to **after** external textures are appended, so the stat
+reflects the full bindless table (glTF + external). The runtime is not
+functionally affected, because the shader macro `MATERIAL_TEXTURE_COUNT` and the
+SRB binding both read the live `GetTextureCount()` (`m_TextureBindings.size()`),
+not `m_Stats.TextureCount`; the move only keeps the diagnostic stat accurate.
+
 ### D7 - Apply External Texture Descriptors To `MaterialPTData`
 
 For each texture slot:
@@ -383,9 +477,13 @@ For each texture slot:
 - If the texture descriptor has no `path`, leave any existing glTF texture state
   untouched unless the enable switch cleared it.
 - If the descriptor has a path and loading succeeds, write the bindless binding
-  index, set the slice to `0.0f`, and set the matching flag.
-- If the descriptor has a path but loading fails, clear the matching flag and
-  use factor-only fallback.
+  index, set the slice to `0.0f`, and set the matching flag (replacing any glTF
+  binding for that slot).
+- If the descriptor has a path but loading fails:
+  - if the slot already has a valid glTF texture binding, keep that glTF binding
+    (do not regress a previously textured shipped-scene material); see "External
+    Texture Override Of glTF Textures";
+  - otherwise clear the matching flag and use factor-only fallback.
 
 Slot mapping:
 
@@ -407,7 +505,37 @@ If `NormalTextureScale` is not already represented in
 adjacent compatibility fix; normal map presence without the authored scale can
 change appearance.
 
+Apply `NormalTextureScale` **only when the `NormalTextureScale` key is present
+in the material JSON**. `Data.normalScale` is otherwise sourced from the glTF
+material (`Attribs.NormalScale`) and is not touched by the scalar-override path.
+Unconditionally writing the parsed value (e.g. defaulting to `1.0` when the key
+is absent) would clobber the glTF-authored normal scale for every
+extension-loaded material and regress glTF normal maps that use a non-1.0 scale.
+Track presence explicitly (for example a `bool HasNormalTextureScale` set during
+parse) and only assign `Data.normalScale` when it is true.
+
 ### D8 - Update Material Classification Helpers
+
+The material-use classification does **not** live in `RTXPTMaterials.cpp`. It is
+computed independently, using glTF-only texture queries, in two other files that
+are now in scope for this change:
+
+- `RTXPTAccelerationStructures.cpp` calls `RTXPTMaterialHasBaseColorTexture`,
+  `RTXPTMaterialIsAlphaTested`, `RTXPTMaterialNeedsAnyHit`, and
+  `RTXPTMaterialIsEmissiveAreaLight` to decide which geometry receives an
+  any-hit shader and how alpha-test / alpha-blend flags are set.
+- `RTXPTLights.cpp` calls `RTXPTMaterialIsEmissiveAreaLight` to decide emissive
+  triangle / area-light extraction.
+
+`RTXPTMaterialHasBaseColorTexture` inspects only `GLTF::Model::GetTexture(...)`,
+so a material whose only base-color (or emissive) texture comes from a
+`.material.json` object returns `false`. Without a fix, the GPU material buffer
+(computed inside `Upload`, which already classifies from final flags) and the
+acceleration-structure / lights classification disagree: an external-base-color
+`ALPHA_MODE_MASK` material would be flagged alpha-tested in the material buffer
+but its geometry would not get an any-hit shader, silently breaking the alpha
+test. `convergence-test.scene.json` does not expose this because its floor is
+opaque and non-emissive.
 
 Any helper that currently checks only glTF texture IDs must account for final
 external texture state:
@@ -418,9 +546,25 @@ external texture state:
 - Transmission texture presence is meaningful only when the material has
   transmission enabled.
 
-The safest approach is to compute these classifications from the final
-`MaterialPTData::flags` after external texture descriptors have been applied,
-instead of re-querying only the original glTF material.
+Required approach: the classification helpers must see the same resolved
+external-texture presence that `Upload` uses. Because the final
+`MaterialPTData::flags` are computed inside `RTXPTMaterials::Upload` and uploaded
+to a GPU buffer, the resolved per-material texture state must be made available
+to the acceleration-structure and lights builds. Two acceptable options:
+
+1. Retain the CPU-side `std::vector<MaterialPTData>` (or just the final per-
+   material `flags`) inside `RTXPTMaterials`, expose it through an accessor, and
+   have `RTXPTAccelerationStructures.cpp` / `RTXPTLights.cpp` classify from the
+   final flags instead of re-querying the glTF material.
+2. Thread the resolved external-texture-presence bits (per material slot) from
+   the scene-graph extension into the existing helpers so they can OR external
+   presence with the glTF query.
+
+Option 1 is preferred because it makes `Upload` the single source of truth for
+material texture state and removes the duplicated glTF-only logic. Whichever
+option is chosen, the same resolved state must drive both the GPU material
+buffer and the any-hit / alpha-test / emissive-area-light classification, so
+they cannot diverge.
 
 ## Testing/Validation
 
@@ -452,9 +596,13 @@ Focused runtime validation:
 Negative validation:
 
 - Temporarily point one material texture path to a missing file in a local test
-  copy of a material JSON.
+  copy of a material JSON, using a slot that has no glTF texture (for example a
+  `convergence-test` material) so factor-only fallback is the expected result.
 - Verify load failure is reported, the sample does not crash, the affected
   texture flag is cleared, and scalar fallback renders.
+- Separately, on a slot that does have a glTF texture (for example a Bistro
+  material), point the external path to a missing file and confirm the glTF
+  texture is retained rather than dropping to factor-only.
 - Restore the material JSON after the local negative test.
 
 Regression validation:
@@ -467,15 +615,30 @@ Regression validation:
   enable switch is true; confirm the existing glTF texture remains active.
 - Load a material where the matching enable switch is false; confirm both glTF
   and external texture paths are disabled for that slot.
+- Load the shipped scenes that author external texture paths on top of glTF
+  textures (`bistro-programmer-art.scene.json` and an ABeautifulGame scene).
+  Confirm they still render correctly through the external texture path, and that
+  no material that was textured before the change becomes untextured
+  (factor-only) after it.
+- For a shipped-scene material whose external texture object exists but fails to
+  load while a glTF texture is present for the same slot, confirm the glTF
+  texture is retained (not dropped to factor-only), per "External Texture
+  Override Of glTF Textures".
+- Confirm any-hit / alpha-test / emissive-area-light classification is consistent
+  for a material whose only base-color or emissive texture comes from a
+  `.material.json` object (D8): the acceleration-structure any-hit decision and
+  the material buffer flags must agree.
 
 ## Risks/Open Questions
 
-- Resource dimension compatibility is the highest-risk detail. The current
-  shader uses `Texture2DArray`, and the existing Diligent material SRV helper
-  requests `RESOURCE_DIM_TEX_2D_ARRAY`. The implementation must prove external
-  DDS textures can be exposed through the same SRV dimension or deliberately
-  migrate all material texture bindings to a consistent `Texture2D` shader
-  contract.
+- Resource dimension compatibility is resolved (see D4): `CreateTextureFromFile`
+  creates `RESOURCE_DIM_TEX_2D` resources, and Diligent's texture view
+  validation allows a `RESOURCE_DIM_TEX_2D_ARRAY` view over a
+  `RESOURCE_DIM_TEX_2D` resource. External textures reuse the existing
+  `CreateMaterialTextureView` helper and the current `Texture2DArray` shader
+  contract is preserved. No `Texture2D` migration is needed. The implementation
+  must still verify `CreateMaterialTextureView` returns non-null for each loaded
+  external file.
 - `TextureLoadInfo::IsSRGB` should be verified with DDS inputs. If the DDS file
   already encodes an explicit sRGB format, the loader may derive the final format
   from file metadata; if it is sRGB-agnostic, the authored JSON flag must control
@@ -493,6 +656,10 @@ Regression validation:
 
 ## Acceptance Criteria
 
+- `RTXPT_ENABLE_MATERIAL_EXTENSION` is defined (default `1`) and, when set to
+  `0`, disables loading and use of the entire `.material.json` material
+  extension: no extension file I/O, `RTXPTGetMaterialExtension` returns
+  `nullptr`, and rendering falls back to pure glTF material behavior.
 - `RTXPTMaterialExtension` records parsed descriptors for `BaseTexture`,
   `OcclusionRoughnessMetallicTexture`, `NormalTexture`, `EmissiveTexture`, and
   `TransmissionTexture`, including `path`, `sRGB`, and `NormalMap`.
@@ -502,15 +669,25 @@ Regression validation:
   slash normalization and PNG-to-DDS preference followed by authored-path
   fallback.
 - External material textures are loaded through Diligent texture loading APIs,
-  assigned SRVs, and appended to `RTXPTMaterials::m_TextureBindings`.
-- The material bindless shader resource declaration and all bound SRVs use a
-  consistent texture dimension contract.
+  assigned SRVs via `CreateMaterialTextureView`, and appended to
+  `RTXPTMaterials::m_TextureBindings`.
+- The material bindless table keeps the existing `Texture2DArray` /
+  `RESOURCE_DIM_TEX_2D_ARRAY` contract for both glTF and external textures; no
+  resource-dimension migration is introduced.
 - `MaterialPTData` texture indices and flags are correct for base color, ORM,
   normal, emissive, and transmission texture slots.
 - `Enable*Texture` switches disable both glTF and external textures for their
   slots.
 - Existing glTF material texture loading continues to work for scenes without
   external RTXPT material texture objects.
+- Shipped scenes that author external texture paths on top of glTF textures
+  (Bistro, ABeautifulGame) still render correctly, and no material that was
+  textured before the change becomes factor-only because of it; an external load
+  failure on a slot that has a glTF texture retains the glTF texture.
+- Any-hit / alpha-test / emissive-area-light classification in
+  `RTXPTAccelerationStructures.cpp` and `RTXPTLights.cpp` is consistent with the
+  final material texture state (including external textures), so the
+  acceleration structure and the GPU material buffer do not disagree.
 - In `convergence-test.scene.json`, material texture count becomes non-zero and
   the floor wood texture from `Models/living_room/textures/wood4.dds` is visible
   in reference mode.
