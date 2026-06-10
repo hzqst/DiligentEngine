@@ -15,6 +15,10 @@ the constructor applies the Balanced performance preset:
 - `D:/RTXPT-fork/Rtxpt/SampleUI.cpp`
 - `D:/RTXPT-fork/Rtxpt/SampleCommon/CommandLine.h`
 - `D:/RTXPT-fork/Rtxpt/NRD/NrdConfig.cpp`
+- `D:/RTXPT-fork/External/Nrd/Include/NRDSettings.h` — required because
+  `getDefaultREBLURSettings()` / `getDefaultRELAXSettings()` in `NrdConfig.cpp`
+  only override a subset of fields; the remaining fields fall through to the
+  `nrd::ReblurSettings` / `nrd::RelaxSettings` library defaults declared here.
 
 ## Scope
 
@@ -38,6 +42,12 @@ post-process contracts.
    post-constructor specialization rather than the requested `SampleUI`
    constructor default.
 4. Preserve local-only fields where there is no upstream ported counterpart.
+5. Default `NEEType` to upstream's `2` (NEE-AT). Unlike the DLSS-RR path guarded
+   in decision 2, NEE-AT is already implemented in the Diligent port, so
+   defaulting to it activates a working path rather than a stub. It is consumed
+   by `PtConsts.NEEType` (`RTXPTSample.cpp`) and the lights baker
+   (`RTXPTLightsBaker.cpp`, `NEEATEnabled = ImportanceSamplingType == 2u`),
+   which is why the DLSS-RR guard does not apply here.
 
 ## Expected Default Alignment
 
@@ -57,11 +67,24 @@ Realtime UI fields:
 
 - `NRDMethod`: upstream `SampleUIData` defaults to `REBLUR`; local should default
   to `RTXPTNrdMethod::REBLUR`.
+- `ReblurSettings.MaxFastAccumulatedFrameNum`: upstream effective default is `6`
+  (`nrd::ReblurSettings` library default; `getDefaultREBLURSettings()` does not
+  override it). Local currently defaults to `0` and should change to `6`.
+- `ReblurSettings.HistoryFixFrameNum`: upstream effective default is `3`
+  (`nrd::ReblurSettings` library default; not overridden by
+  `getDefaultREBLURSettings()`). Local currently defaults to `0` and should
+  change to `3`.
+- `RelaxSettings.HistoryFixFrameNum`: upstream effective default is `3`
+  (`nrd::RelaxSettings` library default; not overridden by
+  `getDefaultRELAXSettings()`). Local currently defaults to `0` and should
+  change to `3`.
 - `RealtimeMode`, `RealtimeSamplesPerPixel`, `StandaloneDenoiser`,
   `RealtimeFireflyFilterEnabled`, `RealtimeFireflyFilterThreshold`, `TexLODBias`,
   stable-plane defaults, denoiser radiance clamp, NRD disocclusion thresholds,
-  RELAX defaults, REBLUR defaults, and DLSS-RR numeric clamps should remain
-  aligned with upstream.
+  RELAX defaults, REBLUR defaults (the fields explicitly set by
+  `getDefaultRELAXSettings()` / `getDefaultREBLURSettings()`), and DLSS-RR numeric
+  clamps should remain aligned with upstream. The three NRD fall-through fields
+  listed above are the only nested denoiser defaults that require a change.
 - `RealtimeAA` remains `Disabled` locally to preserve the existing Diligent
   guard against incomplete DLSS-RR support.
 - `DenoisingGuideDebugView` is local Diligent debug UI and is not changed.
