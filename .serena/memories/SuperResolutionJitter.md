@@ -47,6 +47,18 @@ Attribs.JitterY = FrameDesc.Jitter.y;
 
 Original RTXPT-fork uses `m_view->GetPixelOffset()` directly as pixel-space camera jitter, passes it to `BridgeCamera`, and passes the same `jitterOffset` to Streamline/DLSS constants.
 
+## TAA Follow-up
+
+RTXPT realtime TAA had the same class of bug at a different boundary. DiligentFX `TemporalAntiAliasing` consumes normalized projection/NDC jitter (`2*x/width`, `-2*y/height`), but RTXPT/Donut `view.GetPixelOffset()`, NRD `cameraJitter`, and RTXPT path tracer camera rays all use pixel-space jitter in `[-0.5, 0.5]`.
+
+Correct TAA behavior in `DiligentSamples/Samples/RTXPT`:
+
+- `RTXPTTemporalAAPass::ComputePixelJitter()` returns pixel-space Halton jitter: `Halton(base, sample) - 0.5f`.
+- `RTXPTSample::UpdateFrameConstants()` passes that pixel-space value into `MakePathTracerCameraData()` and `MakePathTracerViewData()`.
+- `RTXPTTemporalAAPass::MakeCameraAttribs()` is the DiligentFX adapter boundary; it converts `PathTracerViewData::PixelOffset` to normalized TAA jitter before calling `TemporalAntiAliasing::GetJitteredProjMatrix()` and before assigning `HLSL::CameraAttribs::f2Jitter`.
+
+Do not pass pixel-space `View.PixelOffset` directly into DiligentFX TAA camera attribs, and do not pass normalized DiligentFX jitter into RTXPT ray generation or NRD.
+
 ## Applicability
 
-Applies to RTXPT realtime SuperResolution/DLSS integration. TAA uses a separate normalized/clip-space style jitter path, so do not blindly apply the same unit convention to TAA without tracing that path separately.
+Applies to RTXPT realtime SuperResolution/DLSS integration and realtime TAA jitter integration. The safe rule is: camera rays, NRD, Donut-style `PixelOffset`, and DLSS jitter are pixel-space; DiligentFX TAA projection/camera attrib jitter is normalized and should be converted only at the TAA adapter boundary.
