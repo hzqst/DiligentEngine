@@ -19,7 +19,7 @@ const float2 p   = (float2(pixel) + float2(0.5, 0.5) + float2(-jitter.x, jitter.
 const float2 ndc = float2(2.0, -2.0) * p + float2(-1.0, 1.0);
 ```
 
-- CPU camera jitter should be stored in `PathTracerCameraData::Jitter` with RTXPT-fork `BridgeCamera` signs: `jitter * float2(1, -1)`. Current realtime code normally passes zero jitter, but the storage convention must stay correct for future non-zero camera jitter.
+- CPU camera jitter should be stored in `PathTracerCameraData::Jitter` with RTXPT-fork `BridgeCamera` signs: `jitter * float2(1, -1)`. The value is in pixel space; realtime Super Resolution passes the upscaler-provided pixel-space jitter directly into the camera path so ray generation and DLSS execute use the same offset.
 - Per-pixel shader jitter is added to `camera.Jitter` before ray generation; the ray helper then applies the pinhole/thin-lens signs described above.
 
 ## Related Files
