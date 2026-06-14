@@ -1,6 +1,6 @@
 # Transmissive Materials Render Incorrectly (Glass / Transparency)
 
-Status: **root cause identified, fix not yet applied**
+Status: **classification and loader alpha-mode fixes applied; glTF-only IoR follow-up still open**
 Scope: reference *and* realtime path-tracer modes (the defect is in material classification + BLAS setup, not mode-specific)
 Repro scene: `assets/kitchen.scene.json`
 
@@ -30,12 +30,13 @@ hits, so the refraction BSDF almost never executes.
 ### Verified causal chain (port)
 
 1. **CPU material classification**
-   `RTXPTMaterialIsAlphaBlended()` returns `true` for *any* transmission
+   Before the fix, `RTXPTMaterialIsAlphaBlended()` returned `true` for *any* transmission
    (`EnableTransmission || TransmissionFactor > 0 || DiffuseTransmissionFactor > 0`):
    `src/RTXPTMaterials.cpp:327-334`.
-   It is additionally forced because the **DiligentFX glTF loader sets `ALPHA_MODE_BLEND` on every
+   It was additionally forced because the **DiligentTools glTF loader set `ALPHA_MODE_BLEND` on every
    material carrying `KHR_materials_transmission`** (`DiligentTools/AssetLoader/src/GLTFLoader.cpp`,
-   ~line 1870). Either source sets `kMaterialFlag_AlphaBlend` during upload:
+   ~line 1870, fixed together with the RTXPT classification). Either source set
+   `kMaterialFlag_AlphaBlend` during upload:
    `src/RTXPTMaterials.cpp:144-145` and `src/RTXPTMaterials.cpp:539-541`.
 
 2. **BLAS geometry flag**
@@ -121,20 +122,23 @@ refract via the closest-hit BSDF, exactly as upstream:
    purely because a material has transmission. Reserve `kMaterialFlag_AlphaBlend` for genuine
    alpha-blended, *non-transmissive* surfaces (e.g. decals / foliage cards with `<1` opacity and no
    transmission).
-2. **Do not let the loader-forced `ALPHA_MODE_BLEND` (for `KHR_materials_transmission`) feed the
-   alpha-blend flag.** When `kMaterialFlag_HasTransmission` is set, the material should build as
-   opaque geometry (`RAYTRACING_GEOMETRY_FLAG_OPAQUE`) and not request the stochastic any-hit.
+2. **Do not force `ALPHA_MODE_BLEND` in the loader for `KHR_materials_transmission`, and do not let
+   any legacy loader-forced value feed the alpha-blend flag.** When `kMaterialFlag_HasTransmission`
+   is set, the material should build as opaque geometry (`RAYTRACING_GEOMETRY_FLAG_OPAQUE`) and not
+   request the stochastic any-hit. GLTFViewer and `GLTF_PBR_Renderer` transmission display behavior
+   is intentionally left as a separate follow-up.
 3. Confirm `RTXPTMaterialNeedsAnyHit()` (`src/RTXPTMaterials.cpp:336-342`) then yields any-hit
    only for true alpha-*test* (and legitimate non-transmissive alpha-blend) materials.
 4. Re-test `kitchen.scene.json`: the `glass-liquid-ice` glass should refract correctly; opacity-1.0
    glass should be unchanged.
 
-### Related defects to address opportunistically (masked in this scene)
+### Related defects / follow-up (masked in this scene)
 
-- The plain-glTF material path (no `.material.json` sidecar) never sets `kMaterialFlag_ThinSurface`
-  and never parses `KHR_materials_ior` — IoR is hardcoded to `1.5`
-  (`src/RTXPTMaterials.cpp:111`; loader has no `KHR_materials_ior` parsing). Harmless for scenes
-  with sidecar material files, but wrong for scenes that rely on glTF-only transmission.
+- The plain-glTF material path (no `.material.json` sidecar) now sets `kMaterialFlag_ThinSurface`
+  for transmission without `KHR_materials_volume`, but still does not parse `KHR_materials_ior`.
+  IoR is hardcoded to `1.5` (`src/RTXPTMaterials.cpp`; loader has no `KHR_materials_ior`
+  parsing). Harmless for scenes with sidecar material files, but wrong for scenes that rely on
+  glTF-only custom IoR.
 
 ## Key references
 
