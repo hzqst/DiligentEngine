@@ -1,6 +1,7 @@
 # Transmissive Materials Render Incorrectly (Glass / Transparency)
 
-Status: **classification and loader alpha-mode fixes applied; glTF-only IoR follow-up still open**
+Status: **resolved — classification + loader alpha-mode fixes applied, and the default `Max bounces`
+aligned to upstream (4 → 20) to fix the remaining black thick glass; glTF-only IoR follow-up still open**
 Scope: reference *and* realtime path-tracer modes (the defect is in material classification + BLAS setup, not mode-specific)
 Repro scene: `assets/kitchen.scene.json`
 
@@ -100,18 +101,52 @@ classification / BLAS routing above. Verified equivalent to RTXPT-fork:
   exist for the scene (`kitchen.Glass`, `glass-liquid-ice.*`, `transparent-machines-*`), so
   `HasTransmission`, IoR, and `ThinSurface` are populated correctly.
 
-## Out of scope (not caused by this bug)
+## Second root cause: opacity-1.0 glass renders black (default `Max bounces` 4 vs upstream 20)
 
-- **Opacity-1.0 transmissive materials are unaffected** by the alpha-blend defect, because the
-  any-hit always accepts (`rand > 1.0` is never true). This covers `kitchen.Glass` (the wine
-  glasses, meshes `Mesh_14` / `Mesh_185` / `Mesh_14.001`), the `transparent-machines` "HOME"
-  sculpture, and `GlassMicrowave`. Their closest-hit transmission path matches upstream.
+The alpha-blend fix above makes transmissive glass build as opaque geometry and refract via the
+closest-hit BSDF, but the **opacity-1.0 wine glasses (`kitchen.Glass`) still rendered solid black**.
+This is an *independent* defect — a port default that diverged from upstream, not a transmission-code
+bug:
+
+- Upstream RTXPT-fork defaults `BounceCount = 20` (`Rtxpt/SampleUI.h`).
+- The port defaulted `m_MaxBounces = 4` (`src/RTXPTSample.hpp`), and `kitchen.scene.json` does not
+  override `maxBounces`, so the scene ran at 4 (see the screenshot's "Max bounce" slider).
+
+A delta refraction increments the path vertex index but does **not** count as a diffuse bounce; the
+path still terminates once `bounceCount < vertexIndex` (`HasFinishedSurfaceBounces`,
+`shaders/PathTracer/PathTracer.hlsli`, identical to upstream). A thick wine-glass wall burns vertices
+fast — outer-enter → inner-exit → far-inner-enter → far-outer-exit reaches ~vertex 4, and the
+refracted ray is terminated *inside* the glass before it can reach the environment map, contributing
+zero radiance → converges to black even at 149 samples. Thin / single-interface glass survives at 4
+bounces, which is exactly why only the thick glasses were affected. At upstream's default of 20 there
+is ample budget and the glass refracts correctly.
+
+The transmission code itself is faithful to upstream — verified: CPU classification, `InteriorList` /
+nested-dielectric handling, volume absorption (`loadHomogeneousVolumeData`), `FalcorBSDF` /
+`MakeStandardBSDFData` lobe selection and eta, closest-hit surface setup, and the bounce-termination
+logic. The only divergence was the default value.
+
+### Fix
+
+Align the port default with upstream (4 → 20):
+
+- `src/RTXPTSample.hpp` — `m_MaxBounces = 20`
+- `src/RTXPTFrameConstants.hpp` — `bounceCount = 20` (frame-constants struct default, for consistency)
+
+## Out of scope (not caused by *this* alpha-blend bug)
+
+- **Opacity-1.0 transmissive materials are unaffected by the alpha-blend defect specifically**,
+  because the any-hit always accepts (`rand > 1.0` is never true). This covers `kitchen.Glass` (the
+  wine glasses, meshes `Mesh_14` / `Mesh_185` / `Mesh_14.001`), the `transparent-machines` "HOME"
+  sculpture, and `GlassMicrowave`. Note, however, that the wine glasses **did** still render black —
+  for the unrelated bounce-budget reason documented in *Second root cause* above, not because of
+  alpha blending.
 - **The kitchen's big window has no glass pane.** Its meshes (`Window_Frame`, `Window_Blinds`,
   `Window_Sill`, `Window_Panels`, …) use opaque wood/plastic/metal materials; the opening shows
-  the environment map directly. A blown-out/"opaque" window and darker-looking wine glasses are
-  most consistent with **auto-exposure / tone-mapping** (the port screenshot uses auto-exposure
-  with EV −4.0, which clips the bright exterior and crushes interior midtones), not transmission.
-  Track this separately from the transparency fix.
+  the environment map directly. The blown-out/"opaque" window is an **auto-exposure / tone-mapping**
+  artifact (the port screenshot uses auto-exposure with EV −4.0, which clips the bright exterior),
+  not a transmission bug. (An earlier revision of this doc also blamed the dark wine glasses on
+  exposure — that was incorrect; they were the bounce-count defect above.)
 
 ## Fix direction
 
