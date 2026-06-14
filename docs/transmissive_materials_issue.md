@@ -142,11 +142,16 @@ Align the port default with upstream (4 → 20):
   for the unrelated bounce-budget reason documented in *Second root cause* above, not because of
   alpha blending.
 - **The kitchen's big window has no glass pane.** Its meshes (`Window_Frame`, `Window_Blinds`,
-  `Window_Sill`, `Window_Panels`, …) use opaque wood/plastic/metal materials; the opening shows
-  the environment map directly. The blown-out/"opaque" window is an **auto-exposure / tone-mapping**
-  artifact (the port screenshot uses auto-exposure with EV −4.0, which clips the bright exterior),
-  not a transmission bug. (An earlier revision of this doc also blamed the dark wine glasses on
-  exposure — that was incorrect; they were the bounce-count defect above.)
+  `Window_Sill`, `Window_Panels`, …) use opaque wood/plastic/metal materials, and `Window_Panels` is a
+  muntin grid (not a sheet); the opening shows the environment map directly. The window rendering
+  *white/opaque instead of the ocean* is **not** a transmission bug — it is the **environment-map
+  resolution** defect tracked separately in
+  [window_environment_map_issue.md](window_environment_map_issue.md): the path tracer was fed
+  DiligentFX's 256² GGX-prefiltered IBL cube instead of a high-resolution environment cube, which
+  averages the bright sky into the horizon texels seen through the window. (An earlier revision of this
+  doc blamed both the dark wine glasses and the bright window on auto-exposure — that was incorrect; the
+  wine glasses were the bounce-count defect above, and the window is the env-cube resolution defect.
+  Auto-exposure may still clip the very brightest exterior highlights.)
 
 ## Fix direction
 
