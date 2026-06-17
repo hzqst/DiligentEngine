@@ -13,10 +13,6 @@ if not "%SolutionDir:~-1%"=="\" SET "SolutionDir=%SolutionDir%\"
 
 cd /d "%SolutionDir%"
 
-if not defined DILIGENT_DXC_DIR (
-    SET "DILIGENT_DXC_DIR=D:\RTXPT-fork\External\dxc\build\native\bin\x64"
-)
-
 call cmake -G "Visual Studio 17 2022" -B "%SolutionDir%build\x64\Debug" -A x64 -DCMAKE_BUILD_TYPE=Debug -DCMAKE_INSTALL_PREFIX="%SolutionDir%install\x64\Debug" -DDILIGENT_BUILD_FX=TRUE -DDILIGENT_BUILD_SAMPLES=TRUE -DDILIGENT_BUILD_TOOLS=TRUE -DDILIGENT_NO_WEBGPU=TRUE -DDILIGENT_NO_ARCHIVER=FALSE -DDILIGENT_BUILD_TESTS=TRUE -DDILIGENT_DEVELOPMENT=TRUE -DDILIGENT_NO_FORMAT_VALIDATION=FALSE -DDILIGENT_USE_SPIRV_TOOLCHAIN=TRUE -DDILIGENT_DXC_DIR="%DILIGENT_DXC_DIR%"
 
 call cmake --build "%SolutionDir%build\x64\Debug" --config Debug --target install
