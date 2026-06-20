@@ -1,4 +1,4 @@
-# `#include` resolution inconsistency: compiler include handlers vs. `ProcessShaderIncludesImpl`
+# `#include` resolution inconsistency: compiler include handlers vs. shader include preprocessing
 
 ## TL;DR
 
@@ -8,18 +8,19 @@ DiligentCore resolves shader `#include "X"` directives **two different ways**:
   as e.g. `Lighting/LightingTypes.hlsli`, a nested `#include "LightingConfig.h"` inside that
   file is resolved relative to the loaded include path, so the compiler can request
   `Lighting/LightingConfig.h`.
-- **At scan time**, DiligentCore's own `ProcessShaderIncludesImpl` — a hand-rolled text scanner
-  used to compute the `BY_CONTENT` render-state-cache hash (and for hot-reload dependency
-  tracking and archiver include enumeration) — passes the **literal include string** to the
-  stream factory with **no include-stack / parent-directory resolution**, so the same nested
-  include is looked up as bare `LightingConfig.h`.
+- **At scan/unroll time**, DiligentCore's own hand-rolled include paths
+  (`ProcessShaderIncludesImpl` for hashing/hot-reload dependency tracking and
+  `UnrollShaderIncludesImpl` for GL archiver source packaging) used to pass the
+  **literal include string** to the stream factory with **no include-stack /
+  parent-directory resolution**, so the same nested include was looked up as bare
+  `LightingConfig.h`.
 
 For shaders with nested directory-relative includes (RTXPT's `PathTracer/Lighting/…` tree), DXC/FXC
 compiles cleanly while the scanner throws `Failed to load shader source file 'LightingConfig.h'`.
 This is a **latent DiligentCore bug**, not an RTXPT bug. RTXPT works around it by hashing the
-cache `BY_NAME` (which never invokes the scanner). The proper fix is to make
-`ProcessShaderIncludesImpl` resolve nested includes against their parent include file's path,
-matching DXC/FXC include-stack behavior.
+cache `BY_NAME` (which never invokes the scanner). The proper fix is to make both
+`ProcessShaderIncludesImpl` and `UnrollShaderIncludesImpl` resolve nested includes against
+their parent include file's path, matching DXC/FXC include-stack behavior.
 
 ---
 
@@ -72,7 +73,7 @@ m_pStreamFactory->CreateInputStream(fileName.c_str(), &pSourceStream);
 
 `shaders\PathTracer` (search dir) + `Lighting/LightingConfig.h` → **found**. ✔
 
-### The scanner passes the literal include text verbatim
+### The scanner/unroller passed the literal include text verbatim
 
 [`ProcessShaderIncludesImpl`](../../../../DiligentCore/Graphics/ShaderTools/src/ShaderToolsCommon.cpp)
 (ShaderToolsCommon.cpp:428) is a text scanner. It first opens `Lighting/LightingTypes.hlsli`;
@@ -99,6 +100,10 @@ discarding the parent include path `Lighting/`:
 factory's flat search dirs (`shaders;shaders\PathTracer`), none of which contain `Lighting/`, and
 throws (ShaderToolsCommon.cpp:243-245). ✘
 
+`UnrollShaderIncludesImpl` had the sibling form of the same bug: the recursive `IncludeCI.FilePath`
+was set from the bare include string before inlining the include source. That path is used by
+`Archiver_GL.cpp` when packaging GLSL source for the GL archiver.
+
 ---
 
 ## The crux
@@ -119,7 +124,7 @@ fails.
 
 It is a genuine latent bug, not just a quirk: **any** project with directory-relative shader
 includes hits it under content hashing, hot-reload dependency tracking
-(`ShaderReloadFactory`/`RenderStateCache::Reload`), or the archiver's include enumeration.
+(`ShaderReloadFactory`/`RenderStateCache::Reload`), or GL archiver source unrolling.
 
 ---
 
@@ -137,11 +142,12 @@ edit. This is a workaround in the sample, not a fix for the engine bug.
 
 ## Scope / impact
 
-Affected whenever `ProcessShaderIncludesImpl` runs over shaders with directory-relative includes:
+Affected whenever Diligent's hand-rolled include preprocessing runs over shaders with
+directory-relative includes:
 
 - `RENDER_STATE_CACHE_FILE_HASH_MODE_BY_CONTENT` — content hashing (the failure above).
 - Hot reload — `ProcessShaderIncludes` builds the include→dependency set for `Reload()`.
-- Archiver — include enumeration when packaging shader source.
+- GL archiver — `UnrollShaderIncludes` inlines include source when packaging shader source.
 
 Not affected: actual DXC/FXC compilation (resolves correctly), and `BY_NAME` hashing.
 
@@ -149,8 +155,9 @@ Not affected: actual DXC/FXC compilation (resolves correctly), and `BY_NAME` has
 
 ## Proposed fix
 
-Make `ProcessShaderIncludesImpl` resolve each nested include against the **path of the currently
-scanned include file** before recursing — matching DXC/FXC include-stack behavior. DiligentCore
+Make `ProcessShaderIncludesImpl` and `UnrollShaderIncludesImpl` resolve each nested include
+against the **path of the currently scanned/unrolled include file** before recursing — matching
+DXC/FXC include-stack behavior. DiligentCore
 already provides the needed helpers in `BasicFileSystem.hpp` (already included by
 `ShaderToolsCommon.cpp`): `FileSystem::GetPathComponents`, `FileSystem::IsPathAbsolute`,
 `FileSystem::SimplifyPath`, `FileSystem::SlashSymbol`.
@@ -254,6 +261,7 @@ static std::string ResolveIncludePath(const ShaderCreateInfo& ShaderCI, const st
 2. Verify Tutorial26_StateCache (flat assets) still populates and reuses its cache.
 3. Confirm the enumerated include set for a nested shader now contains resolved paths
    (`Lighting/LightingConfig.h`) rather than bare names.
+4. Confirm `UnrollShaderIncludes` can inline a nested parent-relative include tree.
 
 If the fix is upstreamed, RTXPT can drop the `BY_NAME` workaround and regain source-edit cache
 invalidation.
@@ -264,8 +272,9 @@ invalidation.
 
 | What | Location |
 |---|---|
-| Scanner that discards the parent dir (root cause) | `DiligentCore/Graphics/ShaderTools/src/ShaderToolsCommon.cpp:428-454` |
+| Scanner/unroller that discarded the parent dir (root cause) | `DiligentCore/Graphics/ShaderTools/src/ShaderToolsCommon.cpp` (`ProcessShaderIncludesImpl`, `UnrollShaderIncludesImpl`) |
 | Scanner throws on unresolved include | `DiligentCore/Graphics/ShaderTools/src/ShaderToolsCommon.cpp:224-245` |
+| GL archiver source inlining path | `DiligentCore/Graphics/Archiver/src/Archiver_GL.cpp` (`UnrollSource`) |
 | DXC handler — opens the include path requested by DXC and strips leading `.\` | `DiligentCore/Graphics/ShaderTools/src/DXCompiler.cpp:185-237` |
 | FXC handler — opens the include path requested by D3DCompile | `DiligentCore/Graphics/GraphicsEngineD3DBase/src/ShaderD3DBase.cpp:57-96` |
 | `BY_NAME` hashing (never calls the scanner) | `DiligentCore/Graphics/GraphicsTools/src/RenderStateCacheImpl.cpp` (`HashShaderCIByFileName`) |
