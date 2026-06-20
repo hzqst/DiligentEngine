@@ -1,23 +1,25 @@
-# `#include` resolution inconsistency: DXC's include handler vs. `ProcessShaderIncludesImpl`
+# `#include` resolution inconsistency: compiler include handlers vs. `ProcessShaderIncludesImpl`
 
 ## TL;DR
 
 DiligentCore resolves shader `#include "X"` directives **two different ways**:
 
-- **At compile time**, DXC (a real preprocessor) resolves each include **relative to the
-  directory of the file doing the including**.
+- **At compile time**, DXC/FXC maintain include-stack context. Once an include file has been loaded
+  as e.g. `Lighting/LightingTypes.hlsli`, a nested `#include "LightingConfig.h"` inside that
+  file is resolved relative to the loaded include path, so the compiler can request
+  `Lighting/LightingConfig.h`.
 - **At scan time**, DiligentCore's own `ProcessShaderIncludesImpl` — a hand-rolled text scanner
   used to compute the `BY_CONTENT` render-state-cache hash (and for hot-reload dependency
   tracking and archiver include enumeration) — passes the **literal include string** to the
-  stream factory with **no parent-directory resolution**, so it only finds includes reachable by
-  their bare name from the factory's flat search-dir list.
+  stream factory with **no include-stack / parent-directory resolution**, so the same nested
+  include is looked up as bare `LightingConfig.h`.
 
-For shaders that write includes relative to their own location (RTXPT's nested
-`PathTracer/Lighting/…` tree), DXC compiles cleanly while the scanner throws
-`Failed to load shader source file 'LightingConfig.h'`. This is a **latent DiligentCore bug**,
-not an RTXPT bug. RTXPT works around it by hashing the cache `BY_NAME` (which never invokes the
-scanner). The proper fix is to make `ProcessShaderIncludesImpl` resolve nested includes against
-their parent file's directory, the way DXC does.
+For shaders with nested directory-relative includes (RTXPT's `PathTracer/Lighting/…` tree), DXC/FXC
+compiles cleanly while the scanner throws `Failed to load shader source file 'LightingConfig.h'`.
+This is a **latent DiligentCore bug**, not an RTXPT bug. RTXPT works around it by hashing the
+cache `BY_NAME` (which never invokes the scanner). The proper fix is to make
+`ProcessShaderIncludesImpl` resolve nested includes against their parent include file's path,
+matching DXC/FXC include-stack behavior.
 
 ---
 
@@ -32,39 +34,51 @@ ERROR: Failed to load shader source file 'LightingConfig.h'
 ERROR: Failed to process includes in file 'PathTracer/Lighting/LightsBaker.hlsl': Unknown error
 ```
 
-The shader **compiles fine** (DXC resolves the include) — only the *content-hash* step, which
-re-scans the source to enumerate includes, fails. `LightsBaker.hlsl` lives in
-`shaders/PathTracer/Lighting/` and does `#include "LightingConfig.h"` (a sibling), but the stream
-factory's search dirs are `shaders;shaders\PathTracer` — neither contains `Lighting/`.
+The shader **compiles fine** (DXC/FXC resolve the nested include) — only the *content-hash* step,
+which re-scans the source to enumerate includes, fails. In the current RTXPT chain,
+`LightsBaker.hlsl` includes `Lighting/LightingTypes.hlsli`; then `LightingTypes.hlsli` includes
+the sibling `LightingConfig.h`. DXC/FXC resolve the second include as `Lighting/LightingConfig.h`,
+but the scanner tries bare `LightingConfig.h` against the flat search dirs
+`shaders;shaders\PathTracer`, neither of which contains the file at that bare name.
 
 ---
 
 ## The two resolution paths
 
-### DXC's handler resolves relative to the including file
+### DXC/FXC keep include-stack context for nested includes
 
-DXC tracks the *current file* being compiled and **joins the include string with that file's
-directory before** calling the include handler. By the time
+Diligent builds a source string and passes it to DXC/FXC with an empty source name; the emitted
+`#line 1 "PathTracer/Lighting/LightsBaker.hlsl"` marker is useful for diagnostics, but it is not
+a reliable mechanism for resolving a top-level sibling include relative to `ShaderCI.FilePath`.
+
+The RTXPT case that compiles is nested: `LightsBaker.hlsl` includes
+`Lighting/LightingTypes.hlsli`, which is reachable from the `shaders\PathTracer` search dir. Once
+the compiler has loaded that include file, a sibling include inside it,
+`#include "LightingConfig.h"`, is resolved relative to the loaded include path, so DXC/FXC ask
+their include handlers for a path equivalent to `Lighting/LightingConfig.h`.
+
 [`DxcIncludeHandlerImpl::LoadSource`](../../../../DiligentCore/Graphics/ShaderTools/src/DXCompiler.cpp)
-runs (DXCompiler.cpp:185), `pFilename` is already the resolved relative path — e.g. compiling
-`PathTracer/Lighting/LightsBaker.hlsl` with `#include "LightingConfig.h"` hands the handler
-`.\PathTracer\Lighting\LightingConfig.h`. The handler just strips a leading `.\` and opens it:
+(DXCompiler.cpp:185) and
+[`D3DIncludeImpl::Open`](../../../../DiligentCore/Graphics/GraphicsEngineD3DBase/src/ShaderD3DBase.cpp)
+(ShaderD3DBase.cpp:65) do not compute that parent directory themselves; they open the path
+requested by the compiler. The DXC handler additionally strips a leading `.\` if DXC provides one:
 
 ```cpp
 // DXCompiler.cpp:210-214
 if (fileName.size() > 2 && fileName[0] == '.' && (fileName[1] == '\\' || fileName[1] == '/'))
-    fileName.erase(0, 2);                         // <-- proof DXC prepended the parent directory
+    fileName.erase(0, 2);
 m_pStreamFactory->CreateInputStream(fileName.c_str(), &pSourceStream);
 ```
 
-`shaders/` (search dir) + `PathTracer/Lighting/LightingConfig.h` → **found**. ✔
+`shaders\PathTracer` (search dir) + `Lighting/LightingConfig.h` → **found**. ✔
 
 ### The scanner passes the literal include text verbatim
 
 [`ProcessShaderIncludesImpl`](../../../../DiligentCore/Graphics/ShaderTools/src/ShaderToolsCommon.cpp)
-(ShaderToolsCommon.cpp:428) is a text scanner. `FindIncludes` extracts the raw string *between
-the quotes* (`LightingConfig.h`) and, when it recurses, sets the child's path to that **bare
-name**, discarding the parent's directory:
+(ShaderToolsCommon.cpp:428) is a text scanner. It first opens `Lighting/LightingTypes.hlsli`;
+inside that file, `FindIncludes` extracts the raw string between the quotes
+(`LightingConfig.h`) and, when it recurses, sets the child's path to that **bare name**,
+discarding the parent include path `Lighting/`:
 
 ```cpp
 // ShaderToolsCommon.cpp:439-448
@@ -74,7 +88,7 @@ name**, discarding the parent's directory:
         return;
 
     ShaderCreateInfo IncludeCI{ShaderCI};
-    IncludeCI.FilePath     = FilePath.c_str();   // "LightingConfig.h" — parent dir thrown away
+    IncludeCI.FilePath     = FilePath.c_str();   // "LightingConfig.h" — parent include path thrown away
     IncludeCI.Source       = nullptr;
     IncludeCI.SourceLength = 0;
     ProcessShaderIncludesImpl(IncludeCI, Includes, IncludeHandler);
@@ -89,18 +103,19 @@ throws (ShaderToolsCommon.cpp:243-245). ✘
 
 ## The crux
 
-The parent path **is** available — `ShaderCI.FilePath` holds
-`PathTracer/Lighting/LightsBaker.hlsl` at the moment of recursion — but the scanner never combines
-it with the include name. So:
+The parent include path **is** available — during the failing nested recursion,
+`ShaderCI.FilePath` holds `Lighting/LightingTypes.hlsli` — but the scanner never combines it with
+the nested include name. So:
 
 | | Include resolution rule |
 |---|---|
-| **DXC** | parent-file-relative, then include search paths (real C/preprocessor semantics) |
-| **Diligent scanner** | flat stream-factory search-dir list only |
+| **DXC/FXC** | include-stack-aware: a nested include is resolved relative to the loaded include file path, then search paths |
+| **Diligent scanner** | literal include string only; no include-stack / parent-path context |
 
-They agree **only** when every include is reachable from a search dir by its bare name (e.g.
-Tutorial26's flat assets). RTXPT writes includes relative to each file's own location, so DXC
-compiles cleanly while the scanner — invoked only to compute the `BY_CONTENT` cache hash — fails.
+They agree **only** when every nested include is reachable from a search dir by the exact spelling
+used in the source (e.g. Tutorial26's flat assets). RTXPT uses nested directory-relative includes,
+so DXC/FXC compile cleanly while the scanner — invoked only to compute the `BY_CONTENT` cache hash —
+fails.
 
 It is a genuine latent bug, not just a quirk: **any** project with directory-relative shader
 includes hits it under content hashing, hot-reload dependency tracking
@@ -134,24 +149,26 @@ Not affected: actual DXC/FXC compilation (resolves correctly), and `BY_NAME` has
 
 ## Proposed fix
 
-Make `ProcessShaderIncludesImpl` resolve each nested include against the **directory of the
-including file** before recursing — mirroring `DxcIncludeHandlerImpl`. DiligentCore already
-provides the needed helpers in `BasicFileSystem.hpp` (already included by `ShaderToolsCommon.cpp`):
-`FileSystem::GetPathComponents`, `FileSystem::IsPathAbsolute`, `FileSystem::SimplifyPath`,
-`FileSystem::SlashSymbol`.
+Make `ProcessShaderIncludesImpl` resolve each nested include against the **path of the currently
+scanned include file** before recursing — matching DXC/FXC include-stack behavior. DiligentCore
+already provides the needed helpers in `BasicFileSystem.hpp` (already included by
+`ShaderToolsCommon.cpp`): `FileSystem::GetPathComponents`, `FileSystem::IsPathAbsolute`,
+`FileSystem::SimplifyPath`, `FileSystem::SlashSymbol`.
 
-### Minimal version (fixes the common case)
+### Minimal version (only safe for parent-relative include trees)
 
-In the `FindIncludes` recursion lambda (ShaderToolsCommon.cpp:439-448), join the include with the
-parent directory and normalize:
+In the `FindIncludes` recursion lambda (ShaderToolsCommon.cpp:439-448), a simple parent-directory
+join fixes trees where includes are consistently parent-relative. It is **not** safe for mixed
+search-dir-relative includes such as RTXPT's first `Lighting/LightingTypes.hlsli` include; use the
+robust version below for the engine fix.
 
 ```cpp
 [&](const std::string& IncludeName, size_t /*Start*/, size_t /*End*/)
 {
-    // Resolve the include relative to the directory of the including file,
-    // the way DXC/FXC (and DxcIncludeHandlerImpl) do. Without this, a nested
-    // include like "LightingConfig.h" inside PathTracer/Lighting/LightsBaker.hlsl
-    // loses its parent directory and cannot be found via the flat search dirs.
+    // Resolve the include relative to the path of the currently scanned file.
+    // Without this, a nested include like "LightingConfig.h" inside
+    // Lighting/LightingTypes.hlsli loses the "Lighting/" parent path and
+    // cannot be found via the flat search dirs.
     std::string ResolvedPath = IncludeName;
     if (ShaderCI.FilePath != nullptr && !FileSystem::IsPathAbsolute(IncludeName.c_str()))
     {
@@ -176,16 +193,17 @@ parent directory and normalize:
 }
 ```
 
-Because the recursion now stores the **resolved** path in `IncludeCI.FilePath`, deeper includes
-compose correctly: `A/B/file.hlsl` → `"C/inc.h"` → `A/B/C/inc.h` → `"deep.h"` → `A/B/C/deep.h`,
-matching DXC.
+Because the recursion now stores the **resolved** path in `IncludeCI.FilePath`, deeper
+parent-relative includes compose correctly: `A/B/file.hlsl` → `"C/inc.h"` → `A/B/C/inc.h` →
+`"deep.h"` → `A/B/C/deep.h`.
 
-### Robust version (matches DXC's two-phase lookup)
+### Robust version (matches DXC/FXC include-stack lookup)
 
-DXC tries **parent-relative first, then the include search paths**. A search-dir-relative include
-(e.g. a shared `Common.hlsli` that lives directly in a search dir but is included from a nested
-file) resolves under the bare name, not the parent-relative one. To match this, probe the stream
-factory and fall back to the bare name when the parent-relative path can't be opened:
+DXC/FXC's effective behavior is **current-include-relative first, then include search paths**. A
+search-dir-relative include (e.g. RTXPT's first `Lighting/LightingTypes.hlsli`) should still
+resolve under its original spelling, not under a blindly prepended parent directory. To match
+this, probe the stream factory and fall back to the original include spelling when the
+current-include-relative path can't be opened:
 
 ```cpp
 static std::string ResolveIncludePath(const ShaderCreateInfo& ShaderCI, const std::string& IncludeName)
@@ -201,14 +219,14 @@ static std::string ResolveIncludePath(const ShaderCreateInfo& ShaderCI, const st
     const std::string Relative = FileSystem::SimplifyPath(
         (ParentDir + FileSystem::SlashSymbol + IncludeName).c_str(), FileSystem::SlashSymbol);
 
-    // Phase 1: parent-file-relative. Phase 2 (fallback): search-dir/bare name.
+    // Phase 1: current-include-relative. Phase 2 (fallback): search-dir/original spelling.
     if (ShaderCI.pShaderSourceStreamFactory != nullptr)
     {
         RefCntAutoPtr<IFileStream> pStream;
         ShaderCI.pShaderSourceStreamFactory->CreateInputStream(Relative.c_str(), &pStream);
         if (pStream)
             return Relative;
-        return IncludeName;   // let the existing error path report the original name if this also fails
+        return IncludeName; // let the existing error path report the original name if this also fails
     }
     return Relative;
 }
@@ -220,9 +238,8 @@ static std::string ResolveIncludePath(const ShaderCreateInfo& ShaderCI, const st
   paths, so `BY_CONTENT` hashes shift once. This is a one-time cache invalidation, not a
   correctness problem.
 - **Backward compatibility:** flat-asset projects (e.g. Tutorial26) still resolve, because the
-  robust version falls back to the bare name; the minimal version keeps working as long as the
-  parent-relative path is reachable from a search dir (it is, since the parent file itself was
-  found that way).
+  robust version falls back to the original include spelling. The minimal version can break mixed
+  trees where a nested file is first included by a search-dir-relative path.
 - **Angle vs quote includes:** the scanner does not distinguish `<...>` from `"..."`. The robust
   (try-relative-then-bare) approach is a superset of correct behavior for both and is the safer
   choice.
@@ -236,7 +253,7 @@ static std::string ResolveIncludePath(const ShaderCreateInfo& ShaderCI, const st
    `Failed to process includes in file 'PathTracer/Lighting/LightsBaker.hlsl'`.
 2. Verify Tutorial26_StateCache (flat assets) still populates and reuses its cache.
 3. Confirm the enumerated include set for a nested shader now contains resolved paths
-   (`PathTracer/Lighting/LightingConfig.h`) rather than bare names.
+   (`Lighting/LightingConfig.h`) rather than bare names.
 
 If the fix is upstreamed, RTXPT can drop the `BY_NAME` workaround and regain source-edit cache
 invalidation.
@@ -249,7 +266,8 @@ invalidation.
 |---|---|
 | Scanner that discards the parent dir (root cause) | `DiligentCore/Graphics/ShaderTools/src/ShaderToolsCommon.cpp:428-454` |
 | Scanner throws on unresolved include | `DiligentCore/Graphics/ShaderTools/src/ShaderToolsCommon.cpp:224-245` |
-| DXC handler — resolves parent-relative, strips `.\` | `DiligentCore/Graphics/ShaderTools/src/DXCompiler.cpp:185-237` |
+| DXC handler — opens the include path requested by DXC and strips leading `.\` | `DiligentCore/Graphics/ShaderTools/src/DXCompiler.cpp:185-237` |
+| FXC handler — opens the include path requested by D3DCompile | `DiligentCore/Graphics/GraphicsEngineD3DBase/src/ShaderD3DBase.cpp:57-96` |
 | `BY_NAME` hashing (never calls the scanner) | `DiligentCore/Graphics/GraphicsTools/src/RenderStateCacheImpl.cpp` (`HashShaderCIByFileName`) |
 | Path helpers for the fix | `DiligentCore/Platforms/Basic/interface/BasicFileSystem.hpp:171-197` |
 | RTXPT workaround (`BY_NAME`) | `DiligentSamples/Samples/RTXPT/src/RTXPTSample.cpp` (cache create block) |
