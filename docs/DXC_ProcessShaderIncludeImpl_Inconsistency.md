@@ -148,8 +148,32 @@ directory-relative includes:
 - `RENDER_STATE_CACHE_FILE_HASH_MODE_BY_CONTENT` — content hashing (the failure above).
 - Hot reload — `ProcessShaderIncludes` builds the include→dependency set for `Reload()`.
 - GL archiver — `UnrollShaderIncludes` inlines include source when packaging shader source.
+- glslang compilation (Vulkan/WebGPU SPIR-V) — `IncluderImpl` in `GLSLangUtils.cpp`,
+  Diligent's own include handler for glslang, served `"…"` includes with no
+  include-stack context, so nested directory-relative includes failed to **compile**,
+  not just to hash. See the note below.
 
-Not affected: actual DXC/FXC compilation (resolves correctly), and `BY_NAME` hashing.
+Not affected: actual DXC/FXC compilation (resolves correctly via the vendor include
+handlers), and `BY_NAME` hashing.
+
+### Note: the glslang compile-time handler had the same bug (now fixed)
+
+DXC/FXC are not the only compilers Diligent feeds. The Vulkan and WebGPU backends
+compile through glslang, whose `#include` directives are served by Diligent's own
+hand-rolled `IncluderImpl` (`GLSLangUtils.cpp`), **not** by a vendor include handler.
+That handler had the **same class of bug** as the scanner: `includeLocal` returned
+`nullptr`, so every `"…"` include fell through to a literal-name lookup with no
+include-stack / parent-path context — exactly like `ProcessShaderIncludesImpl`. Nested
+parent-relative includes therefore failed to *compile* on Vulkan/WebGPU, not merely to
+hash under `BY_CONTENT`.
+
+This was fixed in commits `b5c04a18` and `da8a8de0`: the top-level source name
+(`ShaderCI.FilePath`) is now passed to glslang, and `IncluderImpl::includeLocal`
+resolves a nested include against the including file's directory first, falling back to
+the search dirs — matching DXC/FXC include-stack behavior. The scanner/unroller fixes
+(`ProcessShaderIncludesImpl` / `UnrollShaderIncludesImpl`) do **not** cover glslang: it
+is a separate code path with its own include handler, so don't assume the scanner
+commits closed this one.
 
 ---
 
@@ -277,6 +301,7 @@ invalidation.
 | GL archiver source inlining path | `DiligentCore/Graphics/Archiver/src/Archiver_GL.cpp` (`UnrollSource`) |
 | DXC handler — opens the include path requested by DXC and strips leading `.\` | `DiligentCore/Graphics/ShaderTools/src/DXCompiler.cpp:185-237` |
 | FXC handler — opens the include path requested by D3DCompile | `DiligentCore/Graphics/GraphicsEngineD3DBase/src/ShaderD3DBase.cpp:57-96` |
+| glslang handler — same class of bug, fixed in `b5c04a18`/`da8a8de0` (see note) | `DiligentCore/Graphics/ShaderTools/src/GLSLangUtils.cpp` (`IncluderImpl::includeLocal`) |
 | `BY_NAME` hashing (never calls the scanner) | `DiligentCore/Graphics/GraphicsTools/src/RenderStateCacheImpl.cpp` (`HashShaderCIByFileName`) |
 | Path helpers for the fix | `DiligentCore/Platforms/Basic/interface/BasicFileSystem.hpp:171-197` |
 | RTXPT workaround (`BY_NAME`) | `DiligentSamples/Samples/RTXPT/src/RTXPTSample.cpp` (cache create block) |
