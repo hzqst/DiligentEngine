@@ -305,3 +305,81 @@ invalidation.
 | `BY_NAME` hashing (never calls the scanner) | `DiligentCore/Graphics/GraphicsTools/src/RenderStateCacheImpl.cpp` (`HashShaderCIByFileName`) |
 | Path helpers for the fix | `DiligentCore/Platforms/Basic/interface/BasicFileSystem.hpp:171-197` |
 | RTXPT workaround (`BY_NAME`) | `DiligentSamples/Samples/RTXPT/src/RTXPTSample.cpp` (cache create block) |
+
+## Concerns
+
+There are concerns:
+
+**1**
+The resolver normalizes nested include paths to `BasicFileSystem::SlashSymbol`. On Windows this turns `Nested/Config.hlsl` into `Nested\Config.hlsl`. That works for disk files, but `MemoryShaderSourceFactory` uses exact string keys and looks them up unchanged. A memory-backed shader package using portable `/` names would still fail. The new test uses the default disk factory and even expects platform slashes, so it misses this.
+
+
+**2**
+
+Before this commit, the scanner ignored include-stack context for everything:
+
+```
+#include "Lighting/Types.hlsl"  // scanner asks factory for Lighting/Types.hlsl
+```
+
+Then inside `Lighting/Types.hlsl`:
+
+```
+#include <Config.hlsl>          // scanner asks factory for Config.hlsl
+```
+
+After this commit, the scanner parent-resolves everything, because `FindIncludes` passes only the include string, not whether it came from quotes or angle brackets:
+
+```
+#include <Config.hlsl>          // scanner may ask factory for Lighting/Config.hlsl
+```
+Specific example:
+```
+shaders/
+  Main.hlsl
+  Config.hlsl
+  Lighting/
+    Types.hlsl
+    Config.hlsl
+```
+Main.hlsl:
+```
+#include "Lighting/Types.hlsl"
+```
+Lighting/Types.hlsl:
+```
+#include <Config.hlsl>
+```
+shaders/Config.hlsl:
+
+```
+#define CONFIG_SOURCE 1
+shaders/Lighting/Config.hlsl:
+#define CONFIG_SOURCE 2
+```
+
+With the default stream factory rooted at shaders:
+Before the commit:
+Scanner sees `#include <Config.hlsl>`.
+It passes literal `Config.hlsl`.
+Factory loads `shaders/Config.hlsl`.
+After the commit:
+
+Scanner sees the same directive, but does not know it was <...>.
+It sees parent file path `Lighting/Types.hlsl`.
+It first tries `Lighting/Config.hlsl`.
+Since `shaders/Lighting/Config.hlsl` exists, it uses that.
+
+That is the new risk: a system/angle include can silently become parent-relative in the scanner. If the compiler treats `<Config.hlsl>` as search-path/system include, the scanner hashes/unrolls/enumerates `Lighting/Config.hlsl` while the compiler uses `Config.hlsl`.
+The clean fix is to make `FindIncludes` preserve delimiter kind, then only apply parent-relative probing for quoted includes:
+```
+const bool IsLocalInclude = *pOpenQuoteOrAngleBracket == '"';
+IncludeHandler(IncludeName, IsLocalInclude, Start, End);
+```
+Then:
+```
+ResolvedPath = IsLocalInclude ?
+    ResolveIncludePathForPreprocess(ShaderCI, IncludeName) :
+    IncludeName;
+```
+A regression test should include both `Config.hlsl` files and assert that `#include <Config.hlsl>` inside `Nested/Types.hlsl` still resolves/reports the root/search-path `Config.hlsl`, while `#include "Config.hlsl"` resolves to `Nested/Config.hlsl`.
