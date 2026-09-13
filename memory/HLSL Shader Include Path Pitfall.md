@@ -6,6 +6,17 @@ permalink: diligentengine-hzqst/hlsl-shader-include-path-pitfall
 
 # HLSL Shader Include Path Pitfall
 
+## Status: Fixed Upstream
+
+As of DiligentCore `744f079f6` (API256019) this issue is fixed by the upstream parent-relative include work (`92e7c8b92`, `dbf2f7b8c`, `dcc382a9f`, `671bce3fc`, `33fe72080`). Runtime shader includes now follow standard C/C++ resolution:
+
+- `#include "X"` — resolved relative to the including file first, then falls back to the shader source factory roots.
+- `#include <X>` — resolved only against the factory roots; never relative to the includer.
+
+For DXC this works because `DXCompilerImpl::Compile` now passes `ShaderCI.FilePath` as the DXC source name (`SourceName`, `Graphics/ShaderTools/src/DXCompiler.cpp:763`) instead of an empty string, so the compiler knows each file's directory; the include handler also returns `S_OK` with a null stream on a miss so DXC can try the next candidate. Upstream regression test: `Tests/DiligentCoreAPITest/src/DXCompilerTest.cpp` (`DXCompilerTest.IncludeResolution`).
+
+The scenarios in "Correct Practice" below describe the pre-fix behavior (older Core versions) and are kept for reference. With the current Core, the root-relative include spellings and the extra source-factory roots they prescribe are no longer required — plain sibling includes (e.g. `#include "LightingTypes.hlsli"`) now resolve relative to the including file.
+
 ## Trigger Signal
 
 Runtime shader compilation fails in Diligent with errors like:
@@ -24,7 +35,7 @@ A common RTXPT example is a shader under `Samples/RTXPT/assets/shaders/PathTrace
 
 while the shader is compiled at runtime with `ShaderCI.FilePath = "PathTracer/Lighting/LightsBaker.hlsl"` and source factory roots such as `"shaders;shaders\\PathTracer"`.
 
-## Root Cause / Constraint
+## Root Cause / Constraint (older Core versions)
 
 Diligent's DXC include handler (`DxcIncludeHandlerImpl::LoadSource`) passes the include string directly to `IShaderSourceInputStreamFactory::CreateInputStream`. `DefaultShaderSourceStreamFactory` searches only its configured roots plus the include string; it does not resolve includes relative to the current shader file's directory.
 
@@ -37,7 +48,7 @@ It is not automatically searched as:
 
 - `shaders/PathTracer/Lighting/LightingTypes.hlsli`
 
-## Correct Practice
+## Correct Practice (older Core versions — see Status above)
 
 Write runtime-compiled HLSL includes relative to one of the configured shader source roots, not relative to the including file, unless that directory is explicitly added to the source factory roots.
 
