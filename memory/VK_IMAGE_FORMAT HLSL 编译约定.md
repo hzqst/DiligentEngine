@@ -1,3 +1,9 @@
+---
+title: VK_IMAGE_FORMAT HLSL 编译约定
+type: note
+permalink: diligentengine-hzqst/vk-image-format-hlsl-编译约定
+---
+
 # VK_IMAGE_FORMAT HLSL 编译约定
 
 触发信号：RTXPT / Diligent HLSL shader 中使用 `VK_IMAGE_FORMAT("...")` annotation，尤其是在手动用 `dxc.exe` 做裸编译验证时看到 `expected parameter declarator` 等宏未定义错误。

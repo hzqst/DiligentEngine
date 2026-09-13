@@ -1,3 +1,9 @@
+---
+title: RTXPT Error Handling
+type: note
+permalink: diligentengine-hzqst/rtxpt-error-handling
+---
+
 # RTXPT Error Handling
 
 ## Scope

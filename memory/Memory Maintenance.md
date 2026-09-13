@@ -1,3 +1,9 @@
+---
+title: Memory Maintenance
+type: note
+permalink: diligentengine-hzqst/memory-maintenance
+---
+
 # Memory Maintenance
 
 ## Discovery Model

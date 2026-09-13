@@ -1,3 +1,9 @@
+---
+title: SuperResolutionJitter
+type: note
+permalink: diligentengine-hzqst/super-resolution-jitter
+---
+
 # SuperResolutionJitter
 
 ## Issue

@@ -1,3 +1,9 @@
+---
+title: Suggested Commands
+type: note
+permalink: diligentengine-hzqst/suggested-commands
+---
+
 # Suggested Commands
 
 Run commands from the repository root unless noted otherwise.

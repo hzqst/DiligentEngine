@@ -1,3 +1,9 @@
+---
+title: Task Completion Checklist
+type: note
+permalink: diligentengine-hzqst/task-completion-checklist
+---
+
 # Task Completion Checklist
 
 Before claiming code work is complete:

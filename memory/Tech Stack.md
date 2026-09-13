@@ -1,3 +1,9 @@
+---
+title: Tech Stack
+type: note
+permalink: diligentengine-hzqst/tech-stack
+---
+
 # Tech Stack
 
 - Primary language: C++.

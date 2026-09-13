@@ -1,3 +1,9 @@
+---
+title: Project Structure
+type: note
+permalink: diligentengine-hzqst/project-structure
+---
+
 # Project Structure
 
 Repository root:

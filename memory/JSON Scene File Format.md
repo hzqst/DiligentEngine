@@ -1,3 +1,9 @@
+---
+title: JSON Scene File Format
+type: note
+permalink: diligentengine-hzqst/json-scene-file-format
+---
+
 # JSON Scene File Format
 
 This document describes the structure of scene files that can be loaded by Donut's `Scene` class.

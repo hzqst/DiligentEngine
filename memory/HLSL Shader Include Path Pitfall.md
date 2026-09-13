@@ -1,3 +1,9 @@
+---
+title: HLSL Shader Include Path Pitfall
+type: note
+permalink: diligentengine-hzqst/hlsl-shader-include-path-pitfall
+---
+
 # HLSL Shader Include Path Pitfall
 
 ## Trigger Signal

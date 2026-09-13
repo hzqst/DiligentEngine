@@ -1,3 +1,9 @@
+---
+title: Development Guidelines
+type: note
+permalink: diligentengine-hzqst/development-guidelines
+---
+
 # Development Guidelines
 
 General workflow:

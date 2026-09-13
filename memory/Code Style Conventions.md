@@ -1,3 +1,9 @@
+---
+title: Code Style Conventions
+type: note
+permalink: diligentengine-hzqst/code-style-conventions
+---
+
 # Code Style Conventions
 
 - Follow the nearest `.clang-format`; formatting is validated by CI.

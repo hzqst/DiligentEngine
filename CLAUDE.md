@@ -132,28 +132,29 @@ python ./BuildTools/.NET/dotnet-build-package.py -c Debug -d ./
 
 - Copyright date needs to be updated if we apply changes to source/header files.
 
-## Serena Workflow and Progressive Disclosure
+## Memory Workflow and Progressive Disclosure
 
-### Serena Memories (Keep Context Lean)
+### Basic Memory (Keep Context Lean)
 
-1. Use `list_memories` first to discover available project memories (do not read all memories by default).
-2. Use `read_memory` only for the specific memory files required by the current task.
-3. If memory content is missing, stale, or insufficient, switch to targeted repository reads or symbol/search-based lookup, then maintain memory quality with `write_memory`, `edit_memory`, or `delete_memory`.
+1. Project knowledge notes live in `memory/` (tracked in git) and are served by the `basic-memory` MCP server configured in `.mcp.json` (project `diligentengine-hzqst`).
+2. Use `search_notes` to discover notes and `read_note` only for the specific notes required by the current task (do not read all notes by default).
+3. If note content is missing, stale, or insufficient, switch to targeted repository reads or symbol/search-based lookup, then maintain note quality with `write_note`, `edit_note`, or `delete_note`.
+4. Persist notes through the `basic-memory` MCP tools (or `uvx basic-memory tool ...`); do not hand-edit the `.md` files, since frontmatter (`title`/`type`/`permalink`) is tool-managed.
 
-### High-Level Repository Information (Prefer Memories First)
+### High-Level Repository Information (Prefer Notes First)
 
-Keep the following topics in Serena memories and load them on demand:
+Keep the following topics in Basic Memory and load them on demand:
 
-- Project purpose/background: `project_overview`
-- Tech stack: `tech_stack`
-- Directory and module structure: `project_structure`
-- Common development commands: `suggested_commands`
-- Code style and conventions: `code_style_conventions`
-- Development guidelines and caveats: `development_guidelines`
-- Post-coding-task checklist: `task_completion_checklist`
-- Module-specific topics (for example, graphics backends or platform layers) as separate memory files when needed
+- Project purpose/background: `Project Overview`
+- Tech stack: `Tech Stack`
+- Directory and module structure: `Project Structure`
+- Common development commands: `Suggested Commands`
+- Code style and conventions: `Code Style Conventions`
+- Development guidelines and caveats: `Development Guidelines`
+- Post-coding-task checklist: `Task Completion Checklist`
+- Module-specific topics (for example, graphics backends or platform layers) as separate notes when needed
 
-### Source-File Entry Points When Memories Are Insufficient (Read On Demand)
+### Source-File Entry Points When Notes Are Insufficient (Read On Demand)
 
 - Project documentation: `README.md`, `ReleaseHistory.md`, `doc/`
 - Build and configuration entry points: `CMakeLists.txt`, `build-x64-Debug.bat`, `BuildTools/`, `Directory.Build.props`, `Directory.Packages.props`
@@ -175,9 +176,10 @@ Keep the following topics in Serena memories and load them on demand:
 
 ### Progressive Disclosure Key Points
 
-- Start from memories, then narrow to single files/symbols; avoid scanning the whole repository at once.
+- Start from notes, then narrow to single files/symbols; avoid scanning the whole repository at once.
 - For large or dependency-heavy areas, prefer targeted lookup over full-directory reads.
 
 ### Startup Rule
 
-- Always run `activate_project` when the session starts.
+- Project memory is served by the `basic-memory` MCP server; query it with `search_notes`/`read_note` before broad repository scans.
+- Run `activate_project` at session start only when using Serena MCP tools for code navigation.

@@ -1,3 +1,9 @@
+---
+title: HLSL GetDimensions Cross-Device Caveat
+type: note
+permalink: diligentengine-hzqst/hlsl-get-dimensions-cross-device-caveat
+---
+
 # HLSL GetDimensions Cross-Device Caveat
 
 ## Trigger Signal
