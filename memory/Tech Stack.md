@@ -17,6 +17,5 @@ permalink: diligentengine-hzqst/tech-stack
 
 Important local tooling:
 
-- `serena.exe` is available at `C:\Users\HZDEV\.local\bin\serena.exe`.
-- `.serena/cache` already contains symbol caches for bash, cpp, hlsl, and python.
-- A full `serena project health-check` may be expensive in this checkout because ThirdParty and shader test files are large and some HLSL/encoding paths have caused timeouts or language server termination.
+- Project knowledge notes are stored under the git-tracked `memory/` directory, served by the `basic-memory` MCP server configured in `.mcp.json` (project `diligentengine-hzqst`).
+- `basic-memory` is available through `uvx basic-memory`; when the MCP server is not attached, notes are maintained with `tool write-note` / `tool edit-note` / `tool search-notes`.

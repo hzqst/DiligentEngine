@@ -164,13 +164,13 @@ Keep the following topics in Basic Memory and load them on demand:
 
 ### RTXPT - Reference Sources
 
-- The source code of original RTXPT can be found at `D:/RTXPT-fork`. You can use serena mcp tools to access it by activating project `D:/RTXPT-fork`. You can also read memories from RTXPT via serena mcp to know about how the RTXPT rendering pipeline work.
+- The source code of original RTXPT can be found at `D:/RTXPT-fork`. Its project memories and code-navigation tooling can be used to understand how the RTXPT rendering pipeline works.
 
 ### RTXPT - Port rules
 
 - Any new integrations that ported to `DiligentSamples/Samples/RTXPT` should ALWAYS align up coding style and naming convention with original `RTXPT-fork`. see `DiligentSamples/Samples/RTXPT/RTXPT_FORK_MAPPING.md`
 
-- See `D:/RTXPT-fork/.serena/memories/style_and_conventions.md` for coding style and naming convention — PascalCase classes/functions, `m_`/`g_`/`k`/`c_` prefixes, HLSL namespaces + inline helpers + traditional include guards (DXC compatibility)
+- See RTXPT-fork's `style_and_conventions` memory for coding style and naming convention — PascalCase classes/functions, `m_`/`g_`/`k`/`c_` prefixes, HLSL namespaces + inline helpers + traditional include guards (DXC compatibility)
 
 - Re-porting an upstream RTXPT change today requires manual translation.
 
@@ -182,4 +182,4 @@ Keep the following topics in Basic Memory and load them on demand:
 ### Startup Rule
 
 - Project memory is served by the `basic-memory` MCP server; query it with `search_notes`/`read_note` before broad repository scans.
-- Run `activate_project` at session start only when using Serena MCP tools for code navigation.
+- Run `activate_project` at session start when using MCP code-navigation tooling on this project.

@@ -24,8 +24,8 @@ Before commit/push/PR when requested:
 - Common types: `feat`, `fix`, `refactor`, `docs`, `test`, `chore`.
 - Append `Co-Authored-By: GPT 5.5`.
 
-For Serena-aware future sessions:
+For Basic Memory-aware future sessions:
 
-- Use `list_memories` first and read only memory files relevant to the task.
-- Use targeted symbol/file lookup when memories are stale or insufficient.
-- Update or add memory files when project knowledge changes in a way that is useful for future tasks.
+- Use `search_notes` first and read only the notes relevant to the task.
+- Use targeted symbol/file lookup when notes are stale or insufficient.
+- Update or add notes through the basic-memory tools when project knowledge changes in a way that is useful for future tasks.

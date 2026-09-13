@@ -19,8 +19,8 @@ identically to upstream RTXPT.
 
 This confirms the "DXC / shader-codegen-class failure" hypothesis recorded
 throughout this note. All source-level audits stand: the ported shader logic was
-faithful; the failure was purely `-Od` DXIL codegen. The Serena `suggested_commands`
-smoke command has been updated to drop `-Od`.
+faithful; the failure was purely `-Od` DXIL codegen. The `Suggested Commands`
+memory note's smoke command has been updated to drop `-Od`.
 
 ## Scope
 

@@ -61,12 +61,12 @@ python -m pip install -r .\BuildTools\.NET\requirements.txt
 python .\BuildTools\.NET\dotnet-build-package.py -c Debug -d .\
 ```
 
-Serena inspection:
+Basic Memory inspection:
 
 ```powershell
-serena tools list
-serena project index
-serena project health-check
+uvx basic-memory status --project diligentengine-hzqst
+uvx basic-memory orphans --project diligentengine-hzqst
+uvx basic-memory tool list-projects
 ```
 
 RTXPT closest-hit shader smoke:

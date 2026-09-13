@@ -86,8 +86,8 @@ Debugging lesson preserved for future shader checks:
 - Diligent Debug builds compile DXC shaders with `-Zi -Od -Qembed_debug -Zpr`.
   Ordinary optimized DXC smoke commands can miss validation failures that only
   appear under the runtime Debug flags.
-- The matching RTXPT closest-hit smoke command is recorded in Serena memory
-  `suggested_commands`.
+- The matching RTXPT closest-hit smoke command is recorded in the
+  `Suggested Commands` memory note.
 
 Suggested next handoff focus:
 
@@ -621,5 +621,5 @@ above — reference scatter spine, realtime BUILD/FILL stable-plane delta-tree, 
 the material → `specTrans`/`eta` pipeline — was correct in concluding the port was
 faithful. The defect was never in the shader source; it was in `-Od` DXIL codegen.
 
-Follow-up: do not compile the RTXPT ray tracing shaders with `-Od`. The Serena
-`suggested_commands` smoke command has been updated to drop `-Od`.
+Follow-up: do not compile the RTXPT ray tracing shaders with `-Od`. The
+`Suggested Commands` memory note's smoke command has been updated to drop `-Od`.

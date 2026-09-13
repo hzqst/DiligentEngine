@@ -19,4 +19,4 @@ The repository is organized as a CMake super-project with four main submodules:
 
 The root `CMakeLists.txt` always adds `DiligentCore`, then conditionally adds `DiligentTools`, `DiligentFX`, `DiligentSamples`, `Doc`, optional `DiligentCorePro`, and optional `DiligentCommunity`.
 
-The local root contains a `.serena/project.yml` configured for `hlsl`, `cpp`, `bash`, and `python`.
+The local root contains a git-tracked `memory/` directory served by the basic-memory MCP server configured in `.mcp.json`.
