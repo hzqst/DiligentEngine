@@ -1,3 +1,9 @@
+---
+title: window_environment_map_issue
+type: note
+permalink: diligentengine-hzqst/window-environment-map-issue
+---
+
 # Window Renders Opaque/White Instead of Showing the Environment Map
 
 Status: **fix implemented (needs build + visual verification) — high-resolution environment cube bake

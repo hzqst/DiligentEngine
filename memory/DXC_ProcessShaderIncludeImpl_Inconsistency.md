@@ -1,3 +1,9 @@
+---
+title: DXC_ProcessShaderIncludeImpl_Inconsistency
+type: note
+permalink: diligentengine-hzqst/dxc-process-shader-include-impl-inconsistency
+---
+
 # `#include` resolution inconsistency: compiler include handlers vs. shader include preprocessing
 
 ## TL;DR

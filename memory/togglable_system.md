@@ -1,3 +1,9 @@
+---
+title: togglable_system
+type: note
+permalink: diligentengine-hzqst/togglable-system
+---
+
 # Togglable Node System (window stays opaque — `_togglable_off` occluder not hidden)
 
 Status: **designed, not yet implemented** — this document captures the root cause and the planned diffs for a
@@ -135,7 +141,7 @@ struct RTXPTTogglableNode
 - **Deferred rebuild** in `Update()` (before path tracing): if `m_TogglableNodesDirty`, call
   `RebuildSceneDependentResources()` and clear the flag. (Reuses the proven full-rebuild path; see *Decisions*.)
 
-### 6. `docs/window_environment_map_issue.md` — correction
+### 6. `memory/window_environment_map_issue.md` — correction
 
 Note that the **primary** cause of the opaque window is this un-hidden `_togglable_off` occluder; the env-cube
 resolution was a secondary improvement. Cross-link this document.

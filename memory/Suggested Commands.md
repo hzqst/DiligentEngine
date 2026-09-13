@@ -73,7 +73,7 @@ RTXPT closest-hit shader smoke:
 
 Use this when debugging RTXPT ray tracing shaders. Compile through the repo DXC 1.10.2605.24 path with `-Zi -Qembed_debug -Zpr`.
 
-DO NOT add `-Od`. Compiling with `-Od` (disable optimizations) makes DXC emit incorrect DXIL for `PathTracer::HandleHit` (consistent with `-Od` DXIL mishandling nested `inout` parameters). This was the confirmed root cause of the realtime/reference BxDF rendering regression — with `-Od` the glass/transmission and opaque paths render black; with optimizations enabled, reference mode matches upstream RTXPT exactly. Build and smoke-test the RTXPT shaders with optimizations enabled. See `docs/realtime_bxdf_debugging.md` and `docs/realtime_bxdf_diff.md` (2026-06-09 root-cause entries).
+DO NOT add `-Od`. Compiling with `-Od` (disable optimizations) makes DXC emit incorrect DXIL for `PathTracer::HandleHit` (consistent with `-Od` DXIL mishandling nested `inout` parameters). This was the confirmed root cause of the realtime/reference BxDF rendering regression — with `-Od` the glass/transmission and opaque paths render black; with optimizations enabled, reference mode matches upstream RTXPT exactly. Build and smoke-test the RTXPT shaders with optimizations enabled. See [[realtime_bxdf_debugging]] and [[realtime_bxdf_diff]] (2026-06-09 root-cause entries).
 
 ```powershell
 cd DiligentSamples\Samples\RTXPT\assets

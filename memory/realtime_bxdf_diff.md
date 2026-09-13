@@ -1,3 +1,9 @@
+---
+title: realtime_bxdf_diff
+type: note
+permalink: diligentengine-hzqst/realtime-bxdf-diff
+---
+
 # Reference BxDF Path Differences
 
 Last updated: 2026-06-09

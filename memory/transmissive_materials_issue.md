@@ -1,3 +1,9 @@
+---
+title: transmissive_materials_issue
+type: note
+permalink: diligentengine-hzqst/transmissive-materials-issue
+---
+
 # Transmissive Materials Render Incorrectly (Glass / Transparency)
 
 Status: **resolved — classification + loader alpha-mode fixes applied, and the default `Max bounces`

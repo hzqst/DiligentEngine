@@ -1,3 +1,9 @@
+---
+title: RT_PSO_Archive
+type: note
+permalink: diligentengine-hzqst/rt-pso-archive
+---
+
 # Ray-Tracing PSO archiving assertion in `RenderStateCache` (D3D12 + Vulkan multi-backend build)
 
 ## TL;DR

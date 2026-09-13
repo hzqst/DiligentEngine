@@ -1,3 +1,9 @@
+---
+title: GLTF_KHR_materials_transmission_AlphaMode
+type: note
+permalink: diligentengine-hzqst/gltf-khr-materials-transmission-alpha-mode
+---
+
 # KHR_materials_transmission Must Not Force AlphaMode BLEND
 
 Status: **issue identified, proposed fix not yet applied**
@@ -145,7 +151,7 @@ This affects:
 - whether the closest-hit transmission BSDF is consistently reached.
 
 See also:
-`DiligentSamples/Samples/RTXPT/docs/transmissive_materials_issue.md`
+`memory/transmissive_materials_issue.md`
 
 ## Proposed Fix
 

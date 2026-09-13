@@ -1,3 +1,9 @@
+---
+title: realtime_bxdf_debugging
+type: note
+permalink: diligentengine-hzqst/realtime-bxdf-debugging
+---
+
 # Realtime BxDF Symptoms and Conclusions
 
 Last updated: 2026-06-09
