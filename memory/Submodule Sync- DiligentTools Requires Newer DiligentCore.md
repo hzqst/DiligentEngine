@@ -12,6 +12,45 @@ tags:
 
 # Submodule Sync: DiligentTools Requires Newer DiligentCore
 
+## Coordinated RTXPT merge — 2026-10-25
+
+This section records the current merge baseline. Earlier sections retain historical SHA and build-tool evidence.
+
+### Trigger signals
+
+- Updating Core changes `LoadAndCreateSuperResolutionFactory` from a device pointer to `SuperResolutionFactoryCreateInfo` (upstream `be74a747d`).
+- Updating Tools changes `Material::GetTextureAttrib()` to return `Material::TextureAttribs`, whose GPU fields are nested under `.ShaderAttribs`.
+- FX can fast-forward but depends on newer Tools GLTF types and, when Radient is enabled, Core's `GPU_UPLOAD_MAX_BUFFER_SIZE`.
+- Samples can merge without text conflicts but Tutorial27 requires the newer Core SR factory API.
+
+### Root cause / constraints
+
+Git merge compatibility does not establish cross-module API compatibility. The local Core RR implementation uses shared NGX lifetime management and per-test SR factory ownership. Tools must preserve authored transmission alpha modes and the three local transmission/IOR regression tests. In this checkout, `origin` is DiligentGraphics official upstream; the remote named `upstream` points to hzqst forks.
+
+### Correct practice and resulting commits
+
+1. Merge Core official master `cd2329b91`; adapt the RTXPT SR pass and RR test through `SuperResolutionFactoryCreateInfo`. Resolve the SR test helper conflict by preserving per-test `RefCntAutoPtr` ownership and removing the upstream cached-factory release in ArchivedFSR. Core result: `b5a694ad4`.
+2. Merge Tools official master `dd499e0`; retain both local GLTF string-loading helpers and upstream UV transform helpers. Preserve the authored alpha-mode implementation and all three transmission/IOR tests. Tools result: `ce6a7d0`.
+3. Fast-forward FX to official master `9b65ac23`; change the six RTXPT texture-slice reads to `GetTextureAttrib(...).ShaderAttribs.TextureSlice`. The two RTXPT API adaptations are Samples commit `e0f7b827`.
+4. Merge Samples official master `41fdf49f` after the adaptations. Samples result: `50774cdc`.
+5. Superproject integration commit: `e2361e5a2f49785c4566adf507fa9bc1b373ad82`. Original local tips and official master tips are ancestors of each resulting submodule HEAD. No history was rewritten.
+
+Update Core's pinned ThirdParty gitlinks and Tools' pinned imgui gitlink. Keep Samples NRD `366a90d25ce3772de9360a1e23117d5a455a2771`, NRI `f5fc90a9fcaab97617b4e7a715534247b273a345`, MathLib `974e1387ba936740c7cdc494792d2641bc127e86`, and ShaderMake `5daebdbef45088fc2369d441391ecab0eba25e54` unchanged.
+
+### Validation and limits
+
+- Windows VS 2022 / CMake 3.31.12, `build/x64/Release`, `--config Release`, existing `DILIGENT_NO_RADIENT=ON` configuration.
+- Built `DiligentCoreAPITest`, `DiligentToolsTest`, `DiligentToolsGPUTest`, `RTXPT`, `GLTFViewer`, and `Tutorial27_PostProcessing`.
+- Core D3D12: 12 SR/RR tests passed. Vulkan: 14 SR/RR and promoted dynamic UBO tests passed, using `DILIGENT_TEST_RR_PRESET=5` (E).
+- Tools: 191 unit tests passed. Run from `DiligentTools/Tests/DiligentToolsTest/assets`; running from the executable directory causes missing RenderStates JSON failures. GLTFResourceManager: 9 tests passed on each of D3D12 and Vulkan. Total: 235 tests, zero failures or skips.
+- clang-format 10 checks passed for the modified RTXPT files and Tools test file; changed Core test ranges were checked.
+- Four two-render golden-image captures of `convergence-test.scene.json` succeeded: D3D12/Vulkan reference and D3D12 F/Vulkan E RR. RR logs show two evaluations each; D3D12 retains `HitObject + reorder`. Artifacts: `build/upstream-merge-captures/`; test XML/logs: `build/merge-core-*` and `build/merge-tools-*`.
+- D3D12 logs warn that the DirectSR device factory cannot be created on this host; DLSS RR is available and executes. DirectSR availability, full temporal image quality, performance benchmarking, Debug builds, and Radient were not validated by this sync.
+
+### Applicable scope
+
+Coordinated official-master merges of Core/Tools/FX/Samples for this RTXPT fork, especially when preserving RR, native FP16, SM 6.9/SER, and transmission alpha semantics.
+
 ## Trigger Signal
 
 Syncing `DiligentTools` to upstream `DiligentGraphics/DiligentTools` master fails to build against the Core pinned in this repo, with errors like:
