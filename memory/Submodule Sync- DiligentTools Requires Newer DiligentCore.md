@@ -12,6 +12,39 @@ tags:
 
 # Submodule Sync: DiligentTools Requires Newer DiligentCore
 
+## Core PR follow-up — 2026-10-25
+
+### Trigger signals
+
+Official master integration does not include open PRs #812, #814 and #817. The RTXPT superproject uses Core branch `RTXPT-ray-reconstruction`, not the fork's older branch named `RTXPT`.
+
+### Root cause / constraints
+
+- #812: native D3D12 pipeline libraries ignored initial serialized data, used unstable/non-effective pipeline names, omitted mesh cache reuse, requested the wrong COM interface on cache hits, and lost the native cache when unpacking RenderStateCache PSOs.
+- #814: device shaders reserialized by RenderStateCache lost the selected WGSL entry point. Master commit `f0bd4e5b6` fixes related pipeline/archive entry-point handling but does not cover this path.
+- #817: reusing a signaled manual-reset fence event allows later waits to return prematurely; DXGI frame-latency waitable handles also require explicit closure on recreation/destruction.
+
+### Correct practice and resulting commit
+
+Core `36a1ee7d9921676df5aabef8f09139f7db6c498e` integrates the six fix commits: #812 `2a7f66ee5`, `55f85040d`, `fbb9a2783`; #814 `f3a3a04fb`; #817 `acac7294e`, `720904a21`. These were applied as patches in one integration commit; the original PR commits are not ancestors. Do not import #814's `6a9c8063c` development merge. Keep the prior coordinated merge baseline and all other submodule pins, including NRD/NRI.
+
+Retain the PR fence and four WebGPU regressions. Added `RenderStateCacheTest.NativePipelineCacheRoundTrip`: three native-cache/archive save/load passes, released input blob, restored cache-content checks and actual compute execution. Diagnostic evidence is one native cache miss followed by two hits.
+
+### Validation and limits
+
+- VS 2022 x64 Release: built Core API/unit tests and RTXPT in `build/x64/Release`; independent WebGPU Core API build in `build/core-pr-webgpu` (local CMake cache only; tracked configuration unchanged).
+- 556 Core unit tests, 59 D3D12 GPU tests, 54 Vulkan GPU tests and 6 WebGPU GPU tests passed. Three Metal-only mesh tests skipped. Vulkan RR uses `DILIGENT_TEST_RR_PRESET=5`.
+- Run unit tests from `DiligentCore/Tests/DiligentCoreTest/assets` and GPU tests from `DiligentCore/Tests/DiligentCoreAPITest/assets`. The initial unit invocation from the executable directory failed due to missing shader assets; the full suite passed after correcting the working directory.
+- Avoid rebuilding a test executable while it is running: Windows linker LNK1104 results from the locked executable. The Core unit/RTXPT rebuild passed after the first test process exited.
+- WebGPU command-line mode is `--mode=wgpu`. Its four new RenderStateCache entry-point tests and two existing WGSL archive tests passed with no skips.
+- All 15 modified files passed clang-format 10 and `git diff --check`. Updated modified legacy copyright years to 2026.
+- Two hidden D3D12 RTXPT captures (reference and RR preset F) exited 0; screenshots inspected. RR totals: created=2, executed=2, resets=1, retaining native FP16 and HitObject + reorder. These are startup/render/shutdown smoke checks, not a long-running frame-latency handle leak or temporal image-quality benchmark.
+- Evidence: `build/core-pr-unit-assets-tests.{log,xml}`, `build/core-pr-{d3d12,vk,webgpu}-tests.{log,xml}`, `build/core-pr-d3d12-regression-tests.{log,xml}`, `build/core-pr-captures/`; successful build logs: `core-pr812-814-817-verified-build.log` (API target), `core-pr-unit-rtxpt-build.log`, `core-pr-webgpu-build.log`.
+
+### Applicable scope
+
+Checking open upstream fixes after a master sync; persistent D3D12 PSO reuse, WebGPU RenderStateCache serialization and D3D12 CPU fence/DXGI resource lifetime.
+
 ## Coordinated RTXPT merge — 2026-10-25
 
 This section records the current merge baseline. Earlier sections retain historical SHA and build-tool evidence.
