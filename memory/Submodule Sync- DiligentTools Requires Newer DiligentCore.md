@@ -133,3 +133,33 @@ Upstream deliberately keeps forcing BLEND: the fork's `GLTF-Transmission` branch
 ## Applicable Scope
 
 Any periodic sync of `DiligentCore` / `DiligentTools` / `DiligentFX` / `DiligentSamples` submodules in this repository, and builds of `build/x64/Debug` on this machine.
+
+## FX RTXPT transmission merge — 2026-10-26
+
+### Trigger signals
+
+The coordinated sync's FX baseline `9b65ac23` was official master itself and did not contain the older FX `RTXPT` transmission commit `6930bb8c`. Comparing the named branch with official master shows 1 fork-only commit and 661 upstream-only commits. Remote `origin` is official DiligentGraphics; `upstream` is hzqst.
+
+### Root cause / constraints
+
+- Both branches use PSO bit 39 for different purposes (fork transmission composite vs upstream UNSHADED). Upstream also centralized feature filtering.
+- A mutable scene-color descriptor cannot be overwritten between pending Vulkan draws without invalidating the descriptor set already referenced by the command buffer. A per-draw input must be dynamic.
+- GLSL conversion can substitute zero for textureQueryLevels, so shader GetDimensions mip counts cannot drive roughness LOD reliably. Supply the actual SRV mip range from the CPU.
+- The old fork shader preserved fractional alpha for surviving MASK fragments; masked coverage must become 1 after cutoff.
+
+### Correct practice / result
+
+FX isolated branch `sync/rtxpt-upstream-transmission-20261026`, merge `c666cdaf` has parents `6930bb8c` and `9b65ac23`; both ancestry checks pass, with no history rewrite. Keep upstream APIs and material flag filtering, allocate composite bit 43, use a dynamic scene-color SRV, and pass `TransmissionSceneColorMipCount` through GLTF material upload into former padding `SceneColorMaxMip`. The four-float host/shader transmission layout stays 16 bytes (Factor, IOR, MaxMip, padding); Tools host retains Factor/IOR/Padding[2]. Preserve authored opaque/mask/blend coverage and explicitly enable both transmission and composite flags. Missing scene-color SRV disables compositing and retains ordinary lighting; it is not a substitute glass-compositing path.
+
+`PBR_Shading.fxh` already attenuates punctual diffuse and diffuse IBL by (1 - transmission); do not attenuate the entire resolved lighting again.
+
+### Validation
+
+- x64 Release builds: DiligentFXGPUTest, GLTFViewer, RTXPT; clang-format 10 dry-run passes for the five changed C++ files; patch relative to official master passes git diff --check. The merge imports existing upstream whitespace warnings in unrelated Radient files; these were not modified.
+- Added 17 independent generated-glTF transmission tests (pixel/depth readback, no external assets). Full FX GPU suite: 88 executed tests pass on each of D3D12, Vulkan, D3D11 and OpenGL, zero failures; 20 pre-existing disabled tests per backend remain disabled. Logs/XML: `build/fx-{d3d12,vk,d3d11,gl}-regression-tests.*`.
+- Tests cover coverage, mask cutoff, IOR, roughness, short/restricted mip chains, overlapping sorting, consecutive draws with changed scene SRV, missing scene SRV, transmission/composite flags, surface/alpha filters, depth writes and OIT bypass.
+- Dedicated RTXPT transparent-machines scene runs 32 frames on D3D12 and Vulkan, exits 0, final logs contain no errors, PNGs inspected. Use the existing DDS environment because the source scene's simplebluesky.exr is not recognized by the current texture loader. Artifacts and reproduction script: `build/fx-transmission-captures/`, `build/fx-transmission-scene.scene.json`, `build/run-fx-transmission-captures.ps1`. Scene/model paths are relative to AssetsRoot; the loader appends that root and does not accept absolute scene/model paths. Captures are a smoke test, not converged image quality or RR validation.
+
+### Applicable scope
+
+Future FX official-master merges preserving raster transmission, dynamic scene-color resources, cross-backend mip selection, and authored glTF alpha semantics. WebGPU, Metal, Debug builds and Radient remain outside this validation.
